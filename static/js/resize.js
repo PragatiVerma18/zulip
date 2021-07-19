@@ -5,9 +5,9 @@ import * as blueslip from "./blueslip";
 import * as condense from "./condense";
 import * as message_lists from "./message_lists";
 import * as message_viewport from "./message_viewport";
+import * as navbar_alerts from "./navbar_alerts";
 import * as navigate from "./navigate";
 import {page_params} from "./page_params";
-import * as panels from "./panels";
 import * as popovers from "./popovers";
 import * as ui from "./ui";
 import * as util from "./util";
@@ -42,7 +42,7 @@ function get_new_heights() {
     const res = {};
     const viewport_height = message_viewport.height();
     const top_navbar_height = $("#top_navbar").safeOuterHeight(true);
-    const invite_user_link_height = $("#invite-user-link").safeOuterHeight(true) || 0;
+    const right_sidebar_shorcuts_height = $(".right-sidebar-shortcuts").safeOuterHeight(true) || 0;
     const add_streams_link_height = $("#add-stream-link").safeOuterHeight(true) || 0;
 
     res.bottom_whitespace_height = viewport_height * 0.4;
@@ -68,7 +68,7 @@ function get_new_heights() {
         Number.parseInt($("#right-sidebar").css("marginTop"), 10) -
         $("#userlist-header").safeOuterHeight(true) -
         $("#user_search_section").safeOuterHeight(true) -
-        invite_user_link_height;
+        right_sidebar_shorcuts_height;
 
     res.buddy_list_wrapper_max_height = Math.max(80, usable_height);
 
@@ -123,49 +123,78 @@ function left_userlist_get_new_heights() {
 }
 
 export function watch_manual_resize(element) {
-    return (function on_box_resize(cb) {
-        const box = document.querySelector(element);
+    const box = document.querySelector(element);
 
-        if (!box) {
-            blueslip.error("Bad selector in watch_manual_resize: " + element);
-            return undefined;
-        }
+    if (!box) {
+        blueslip.error("Bad selector in watch_manual_resize: " + element);
+        return undefined;
+    }
 
-        const meta = {
-            box,
-            height: null,
-            mousedown: false,
-        };
+    const meta = {
+        box,
+        height: null,
+        mousedown: false,
+    };
 
-        const box_handler = function () {
-            meta.mousedown = true;
-            meta.height = meta.box.clientHeight;
-        };
-        meta.box.addEventListener("mousedown", box_handler);
+    const box_handler = function () {
+        meta.mousedown = true;
+        meta.height = meta.box.clientHeight;
+    };
+    meta.box.addEventListener("mousedown", box_handler);
 
-        // If the user resizes the textarea manually, we use the
-        // callback to stop autosize from adjusting the height.
-        const body_handler = function () {
-            if (meta.mousedown === true) {
-                meta.mousedown = false;
-                if (meta.height !== meta.box.clientHeight) {
-                    meta.height = meta.box.clientHeight;
-                    cb.call(meta.box, meta.height);
-                }
+    // If the user resizes the textarea manually, we use the
+    // callback to stop autosize from adjusting the height.
+    // It will be re-enabled when this component is next opened.
+    const body_handler = function () {
+        if (meta.mousedown === true) {
+            meta.mousedown = false;
+            if (meta.height !== meta.box.clientHeight) {
+                meta.height = meta.box.clientHeight;
+                autosize.destroy($(element)).height(meta.height + "px");
             }
-        };
-        document.body.addEventListener("mouseup", body_handler);
+        }
+    };
+    document.body.addEventListener("mouseup", body_handler);
 
-        return [box_handler, body_handler];
-    })((height) => {
-        // This callback disables autosize on the textarea.  It
-        // will be re-enabled when this component is next opened.
-        autosize.destroy($(element)).height(height + "px");
-    });
+    return [box_handler, body_handler];
+}
+
+export function reset_compose_textarea_max_height(bottom_whitespace_height) {
+    // If the compose-box is open, we set the `max-height` property of
+    // `compose-textarea` so that the compose-box's maximum extent
+    // does not overlap the last message in the current stream.is the
+    // right size to leave a tiny bit of space after the last message
+    // of the current stream.
+
+    // Compute bottom_whitespace_height if not provided by caller.
+    if (bottom_whitespace_height === undefined) {
+        const h = narrow_window ? left_userlist_get_new_heights() : get_new_heights();
+        bottom_whitespace_height = h.bottom_whitespace_height;
+    }
+
+    const compose_height = Number.parseInt($("#compose").outerHeight(), 10);
+    const compose_textarea_height = Number.parseInt($("#compose-textarea").outerHeight(), 10);
+    const compose_non_textarea_height = compose_height - compose_textarea_height;
+
+    $("#compose-textarea").css(
+        "max-height",
+        // The 10 here leaves space for the selected message border.
+        bottom_whitespace_height - compose_non_textarea_height - 10,
+    );
 }
 
 export function resize_bottom_whitespace(h) {
     $("#bottom_whitespace").height(h.bottom_whitespace_height);
+
+    // The height of the compose box is tied to that of
+    // bottom_whitespace, so update it if necessary.
+    //
+    // reset_compose_textarea_max_height cannot compute the right
+    // height correctly while compose is hidden. This is OK, because
+    // we also resize compose every time it is opened.
+    if ($(".message_comp").is(":visible")) {
+        reset_compose_textarea_max_height(h.bottom_whitespace_height);
+    }
 }
 
 export function resize_stream_filters_container(h) {
@@ -214,7 +243,7 @@ export function resize_sidebars() {
 }
 
 export function resize_page_components() {
-    panels.resize_app();
+    navbar_alerts.resize_app();
     const h = resize_sidebars();
     resize_bottom_whitespace(h);
 }

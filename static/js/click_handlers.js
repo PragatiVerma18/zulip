@@ -14,35 +14,33 @@ import * as buddy_data from "./buddy_data";
 import * as channel from "./channel";
 import * as compose from "./compose";
 import * as compose_actions from "./compose_actions";
+import * as compose_error from "./compose_error";
 import * as compose_state from "./compose_state";
 import {media_breakpoints_num} from "./css_variables";
 import * as emoji_picker from "./emoji_picker";
 import * as hash_util from "./hash_util";
 import * as hotspots from "./hotspots";
-import {$t} from "./i18n";
 import * as message_edit from "./message_edit";
-import * as message_edit_history from "./message_edit_history";
 import * as message_flags from "./message_flags";
 import * as message_lists from "./message_lists";
 import * as message_store from "./message_store";
-import * as muting_ui from "./muting_ui";
+import * as muted_topics_ui from "./muted_topics_ui";
 import * as narrow from "./narrow";
 import * as notifications from "./notifications";
 import * as overlays from "./overlays";
-import {page_params} from "./page_params";
 import * as popovers from "./popovers";
 import * as reactions from "./reactions";
-import * as recent_topics from "./recent_topics";
+import * as recent_topics_ui from "./recent_topics_ui";
 import * as rows from "./rows";
 import * as server_events from "./server_events";
 import * as settings_panel_menu from "./settings_panel_menu";
 import * as settings_toggle from "./settings_toggle";
-import * as stream_edit from "./stream_edit";
 import * as stream_list from "./stream_list";
 import * as stream_popover from "./stream_popover";
+import * as topic_list from "./topic_list";
 import * as ui_util from "./ui_util";
 import * as unread_ops from "./unread_ops";
-import * as user_status_ui from "./user_status_ui";
+import * as user_profile from "./user_profile";
 import * as util from "./util";
 
 export function initialize() {
@@ -182,8 +180,7 @@ export function initialize() {
         // on the other hand, on mobile it should be done with a long tap.
     } else {
         $("#main_div").on("longtap", ".messagebox", function (e) {
-            // find the correct selection API for the browser.
-            const sel = window.getSelection ? window.getSelection() : document.selection;
+            const sel = window.getSelection();
             // if one matches, remove the current selections.
             // after a longtap that is valid, there should be no text selected.
             if (sel) {
@@ -216,34 +213,12 @@ export function initialize() {
         $(".tooltip").remove();
     });
 
-    $("body").on("mouseenter", ".message_edit_notice", (e) => {
-        if (page_params.realm_allow_edit_history) {
-            $(e.currentTarget).addClass("message_edit_notice_hover");
-        }
-    });
-
-    $("body").on("mouseleave", ".message_edit_notice", (e) => {
-        if (page_params.realm_allow_edit_history) {
-            $(e.currentTarget).removeClass("message_edit_notice_hover");
-        }
-    });
-
-    $("body").on("click", ".message_edit_notice", (e) => {
-        popovers.hide_all();
-        const message_id = rows.id($(e.currentTarget).closest(".message_row"));
-        const row = message_lists.current.get_row(message_id);
-        const message = message_lists.current.get(rows.id(row));
-        const message_history_cancel_btn = $("#message-history-cancel");
-
-        if (page_params.realm_allow_edit_history) {
-            message_edit_history.show_history(message);
-            message_history_cancel_btn.trigger("focus");
-        }
-        e.stopPropagation();
-        e.preventDefault();
-    });
-
     $("body").on("click", ".reveal_hidden_message", (e) => {
+        // Hide actions popover to keep its options
+        // in sync with revealed/hidden state of
+        // muted user's message.
+        popovers.hide_actions_popover();
+
         const message_id = rows.id($(e.currentTarget).closest(".message_row"));
         message_lists.current.view.reveal_hidden_message(message_id);
         e.stopPropagation();
@@ -260,16 +235,6 @@ export function initialize() {
             return;
         }
         window.location.href = $(this).attr("href");
-    });
-
-    // USER STATUS MODAL
-
-    $(".user-status-value").on("click", (e) => {
-        e.stopPropagation();
-        const user_status_value = $(e.currentTarget).attr("data-user-status-value");
-        $("input.user_status").val(user_status_value);
-        user_status_ui.toggle_clear_message_button();
-        user_status_ui.update_button();
     });
 
     // MESSAGE EDITING
@@ -317,18 +282,6 @@ export function initialize() {
         e.stopPropagation();
         popovers.hide_all();
     });
-    $("body").on("click", ".copy_message", function (e) {
-        const row = $(this).closest(".message_row");
-        message_edit.end_message_row_edit(row);
-        row.find(".alert-msg").text($t({defaultMessage: "Copied!"}));
-        row.find(".alert-msg").css("display", "block");
-        row.find(".alert-msg").delay(1000).fadeOut(300);
-        if ($(".tooltip").is(":visible")) {
-            $(".tooltip").hide();
-        }
-        e.preventDefault();
-        e.stopPropagation();
-    });
     $("body").on("click", "a", function () {
         if (document.activeElement === this) {
             ui_util.blur_active_element();
@@ -373,14 +326,31 @@ export function initialize() {
         row.find(".markdown_preview").show();
     });
 
+    // RESOLVED TOPICS
+    $("body").on("click", ".message_header .on_hover_topic_resolve", (e) => {
+        e.stopPropagation();
+        const recipient_row = $(e.target).closest(".recipient_row");
+        const message_id = rows.id_for_recipient_row(recipient_row);
+        const topic_name = $(e.target).attr("data-topic-name");
+        message_edit.toggle_resolve_topic(message_id, topic_name);
+    });
+
+    $("body").on("click", ".message_header .on_hover_topic_unresolve", (e) => {
+        e.stopPropagation();
+        const recipient_row = $(e.target).closest(".recipient_row");
+        const message_id = rows.id_for_recipient_row(recipient_row);
+        const topic_name = $(e.target).attr("data-topic-name");
+        message_edit.toggle_resolve_topic(message_id, topic_name);
+    });
+
     // TOPIC MUTING
     function mute_or_unmute_topic($elt, mute_topic) {
         const stream_id = Number.parseInt($elt.attr("data-stream-id"), 10);
         const topic = $elt.attr("data-topic-name");
         if (mute_topic) {
-            muting_ui.mute_topic(stream_id, topic);
+            muted_topics_ui.mute_topic(stream_id, topic);
         } else {
-            muting_ui.unmute_topic(stream_id, topic);
+            muted_topics_ui.unmute_topic(stream_id, topic);
         }
     }
 
@@ -401,7 +371,7 @@ export function initialize() {
     $("body").on("click", "#recent_topics_table .on_hover_topic_unmute", (e) => {
         e.stopPropagation();
         const $elt = $(e.target);
-        recent_topics.focus_clicked_element($elt, recent_topics.COLUMNS.mute);
+        recent_topics_ui.focus_clicked_element($elt, recent_topics_ui.COLUMNS.mute);
         mute_or_unmute_topic($elt, false);
     });
 
@@ -410,18 +380,18 @@ export function initialize() {
     $("body").on("click", "#recent_topics_table .on_hover_topic_mute", (e) => {
         e.stopPropagation();
         const $elt = $(e.target);
-        recent_topics.focus_clicked_element($elt, recent_topics.COLUMNS.mute);
+        recent_topics_ui.focus_clicked_element($elt, recent_topics_ui.COLUMNS.mute);
         mute_or_unmute_topic($elt, true);
     });
 
     $("body").on("click", "#recent_topics_search", (e) => {
         e.stopPropagation();
-        recent_topics.change_focused_element($(e.target), "click");
+        recent_topics_ui.change_focused_element($(e.target), "click");
     });
 
     $("body").on("click", "#recent_topics_table .on_hover_topic_read", (e) => {
         e.stopPropagation();
-        recent_topics.focus_clicked_element($(e.target), recent_topics.COLUMNS.read);
+        recent_topics_ui.focus_clicked_element($(e.target), recent_topics_ui.COLUMNS.read);
         const stream_id = Number.parseInt($(e.currentTarget).attr("data-stream-id"), 10);
         const topic = $(e.currentTarget).attr("data-topic-name");
         unread_ops.mark_topic_as_read(stream_id, topic);
@@ -431,20 +401,20 @@ export function initialize() {
 
     $("body").on("click", ".btn-recent-filters", (e) => {
         e.stopPropagation();
-        recent_topics.change_focused_element($(e.target), "click");
-        recent_topics.set_filter(e.currentTarget.dataset.filter);
-        recent_topics.update_filters_view();
+        recent_topics_ui.change_focused_element($(e.target), "click");
+        recent_topics_ui.set_filter(e.currentTarget.dataset.filter);
+        recent_topics_ui.update_filters_view();
     });
 
     $("body").on("click", "td.recent_topic_stream", (e) => {
         e.stopPropagation();
-        recent_topics.focus_clicked_element($(e.target), recent_topics.COLUMNS.stream);
+        recent_topics_ui.focus_clicked_element($(e.target), recent_topics_ui.COLUMNS.stream);
         window.location.href = $(e.currentTarget).find("a").attr("href");
     });
 
     $("body").on("click", "td.recent_topic_name", (e) => {
         e.stopPropagation();
-        recent_topics.focus_clicked_element($(e.target), recent_topics.COLUMNS.topic);
+        recent_topics_ui.focus_clicked_element($(e.target), recent_topics_ui.COLUMNS.topic);
         window.location.href = $(e.currentTarget).find("a").attr("href");
     });
 
@@ -453,7 +423,7 @@ export function initialize() {
         "keyup",
         "#recent_topics_search",
         _.debounce(() => {
-            recent_topics.update_filters_view();
+            recent_topics_ui.update_filters_view();
             // Wait for user to go idle before initiating search.
         }, 300),
     );
@@ -461,7 +431,7 @@ export function initialize() {
     $("body").on("click", "#recent_topics_search_clear", (e) => {
         e.stopPropagation();
         $("#recent_topics_search").val("");
-        recent_topics.update_filters_view();
+        recent_topics_ui.update_filters_view();
     });
 
     // RECIPIENT BARS
@@ -607,15 +577,16 @@ export function initialize() {
 
     // MISC
 
-    (function () {
+    {
         const sel = ["#stream_filters", "#global_filters", "#user_presences"].join(", ");
 
         $(sel).on("click", "a", function () {
             this.blur();
         });
-    })();
+    }
 
     popovers.register_click_handlers();
+    user_profile.register_click_handlers();
     emoji_picker.register_click_handlers();
     stream_popover.register_click_handlers();
     notifications.register_click_handlers();
@@ -639,10 +610,7 @@ export function initialize() {
     // COMPOSE
 
     $("body").on("click", "#compose-send-status .compose-send-status-close", () => {
-        $("#compose-send-status").stop(true).fadeOut(500);
-    });
-    $("body").on("click", "#nonexistent_stream_reply_error .compose-send-status-close", () => {
-        $("#nonexistent_stream_reply_error").stop(true).fadeOut(500);
+        compose_error.hide();
     });
 
     $("body").on("click", ".empty_feed_compose_stream", (e) => {
@@ -683,8 +651,7 @@ export function initialize() {
         popovers.hide_all();
     }
 
-    $("body").on("click", "#compose_buttons", handle_compose_click);
-    $("body").on("click", ".compose-content", handle_compose_click);
+    $("body").on("click", "#compose-content", handle_compose_click);
 
     $("body").on("click", "#compose_close", () => {
         compose_actions.cancel();
@@ -692,12 +659,9 @@ export function initialize() {
 
     // LEFT SIDEBAR
 
-    $("#streams_inline_cog").on("click", (e) => {
-        e.stopPropagation();
-        browser_history.go_to_location("streams/subscribed");
-    });
+    $("body").on("click", "#clear_search_topic_button", topic_list.clear_topic_search);
 
-    $("#streams_filter_icon").on("click", (e) => {
+    $(".streams_filter_icon").on("click", (e) => {
         e.stopPropagation();
         stream_list.toggle_filter_displayed(e);
     });
@@ -756,7 +720,7 @@ export function initialize() {
 
     // Don't focus links on middle click.
     $("body").on("mouseup", "a", (e) => {
-        if (e.which === 2) {
+        if (e.button === 1) {
             // middle click
             e.target.blur();
         }
@@ -764,84 +728,6 @@ export function initialize() {
 
     // Don't focus links on context menu.
     $("body").on("contextmenu", "a", (e) => e.target.blur());
-
-    (function () {
-        const map = {
-            ".stream-description-editable": {
-                on_start: stream_edit.set_raw_description,
-                on_save: stream_edit.change_stream_description,
-            },
-            ".stream-name-editable": {
-                on_start: null,
-                on_save: stream_edit.change_stream_name,
-            },
-        };
-
-        $(document).on("keydown", ".editable-section", function (e) {
-            e.stopPropagation();
-            // Cancel editing description if Escape key is pressed.
-            if (e.which === 27) {
-                $("[data-finish-editing='.stream-description-editable']").hide();
-                $(this).attr("contenteditable", false);
-                $(this).text($(this).attr("data-prev-text"));
-                $("[data-make-editable]").html("");
-            } else if (e.which === 13) {
-                $(this).siblings(".checkmark").trigger("click");
-            }
-        });
-
-        $(document).on("drop", ".editable-section", () => false);
-
-        $(document).on("input", ".editable-section", function () {
-            // if there are any child nodes, inclusive of <br> which means you
-            // have lines in your description or title, you're doing something
-            // wrong.
-            for (let x = 0; x < this.childNodes.length; x += 1) {
-                if (this.childNodes[x].nodeType !== 3) {
-                    this.textContent = this.textContent.replace(/\n/, "");
-                    break;
-                }
-            }
-        });
-
-        $("body").on("click", "[data-make-editable]", function () {
-            const selector = $(this).attr("data-make-editable");
-            const edit_area = $(this).parent().find(`${selector}`);
-            $(selector).removeClass("stream-name-edit-box");
-            if (edit_area.attr("contenteditable") === "true") {
-                $(`[data-finish-editing='${CSS.escape(selector)}']`).hide();
-                edit_area.attr("contenteditable", false);
-                edit_area.text(edit_area.attr("data-prev-text"));
-                $(this).html("");
-            } else {
-                $(`[data-finish-editing='${CSS.escape(selector)}']`).show();
-
-                $(selector).addClass("stream-name-edit-box");
-                edit_area
-                    .attr("data-prev-text", edit_area.text().trim())
-                    .attr("contenteditable", true);
-
-                if (map[selector].on_start) {
-                    map[selector].on_start(this, edit_area);
-                }
-
-                ui_util.place_caret_at_end(edit_area[0]);
-
-                $(this).html("&times;");
-            }
-        });
-
-        $("body").on("click", "[data-finish-editing]", function (e) {
-            const selector = $(this).attr("data-finish-editing");
-            $(selector).removeClass("stream-name-edit-box");
-            if (map[selector].on_save) {
-                map[selector].on_save(e);
-                $(this).hide();
-                $(this).parent().find(`${selector}`).attr("contenteditable", false);
-                $(`[data-make-editable='${CSS.escape(selector)}']`).html("");
-            }
-        });
-    })();
 
     // HOTSPOTS
 
@@ -910,6 +796,10 @@ export function initialize() {
     $("body").on("hidden.bs.modal", () => {
         // Enable mouse events for the background as the modal closes.
         overlays.enable_background_mouse_events();
+
+        // TODO: Remove this once Bootstrap is upgraded.
+        // See: https://github.com/zulip/zulip/pull/18720
+        $(".modal.in").removeClass("in");
     });
 
     // MAIN CLICK HANDLER
@@ -928,14 +818,27 @@ export function initialize() {
                 '.popover-inner, #user-profile-modal, .emoji-info-popover, .app-main [class^="column-"].expanded',
             ).has(e.target).length === 0
         ) {
-            popovers.hide_all();
+            // Since tippy instance can handle outside clicks on their own,
+            // we don't need to trigger them from here.
+            // This fixes the bug of `hideAll` being called
+            // after a tippy popover has been triggered which hides
+            // the popover without being displayed.
+            const not_hide_tippy_instances = true;
+            popovers.hide_all(not_hide_tippy_instances);
         }
 
         if (compose_state.composing()) {
-            if ($(e.target).closest("a").length > 0) {
+            if (
+                $(e.target).closest("a").length > 0 ||
+                $(e.target).closest(".copy_codeblock").length > 0
+            ) {
                 // Refocus compose message text box if one clicks an external
-                // link/url to view something else while composing a message
-                // See issue #4331 for more details
+                // link/url to view something else while composing a message.
+                // See issue #4331 for more details.
+                //
+                // We do the same when copying a code block, since the
+                // most likely next action within Zulip is to paste it
+                // into compose and modify it.
                 $("#compose-textarea").trigger("focus");
                 return;
             } else if (

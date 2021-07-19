@@ -15,11 +15,12 @@ export function activate({
 }) {
     const is_my_poll = people.is_my_user_id(message.sender_id);
     const poll_data = new PollData({
+        message_sender_id: message.sender_id,
         current_user_id: people.my_current_user_id(),
         is_my_poll,
         question,
         options,
-        comma_separated_names: people.safe_full_names,
+        comma_separated_names: people.get_full_names_for_poll_option,
         report_error_function: blueslip.warn,
     });
 
@@ -125,12 +126,12 @@ export function activate({
         elem.find("input.poll-question").on("keydown", (e) => {
             e.stopPropagation();
 
-            if (e.keyCode === 13) {
+            if (e.key === "Enter") {
                 submit_question();
                 return;
             }
 
-            if (e.keyCode === 27) {
+            if (e.key === "Escape") {
                 abort_edit();
                 return;
             }
@@ -159,12 +160,12 @@ export function activate({
         elem.find("input.poll-option").on("keydown", (e) => {
             e.stopPropagation();
 
-            if (e.keyCode === 13) {
+            if (e.key === "Enter") {
                 submit_option();
                 return;
             }
 
-            if (e.keyCode === 27) {
+            if (e.key === "Escape") {
                 $("input.poll-option").val("");
                 return;
             }

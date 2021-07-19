@@ -20,7 +20,8 @@ from zerver.lib.actions import (
     do_update_message,
 )
 from zerver.lib.avatar import avatar_url
-from zerver.lib.markdown import MentionData
+from zerver.lib.exceptions import JsonableError
+from zerver.lib.mention import MentionData
 from zerver.lib.message import (
     MessageDict,
     get_first_visible_message_id,
@@ -29,12 +30,11 @@ from zerver.lib.message import (
     update_first_visible_message_id,
 )
 from zerver.lib.narrow import build_narrow_filter, is_web_public_compatible
-from zerver.lib.request import JsonableError
 from zerver.lib.sqlalchemy_utils import get_sqlalchemy_connection
 from zerver.lib.streams import StreamDict, create_streams_if_needed, get_public_streams_queryset
 from zerver.lib.test_classes import ZulipTestCase
 from zerver.lib.test_helpers import HostRequestMock, get_user_messages, queries_captured
-from zerver.lib.topic import MATCH_TOPIC, TOPIC_NAME
+from zerver.lib.topic import MATCH_TOPIC, RESOLVED_TOPIC_PREFIX, TOPIC_NAME
 from zerver.lib.topic_mutes import set_topic_mutes
 from zerver.lib.types import DisplayRecipientT
 from zerver.lib.upload import create_attachment
@@ -159,13 +159,13 @@ class NarrowBuilderTest(ZulipTestCase):
         ]
         realm = get_realm("zulip")
         created, existing = create_streams_if_needed(realm, stream_dicts)
-        self.assertEqual(len(created), 3)
-        self.assertEqual(len(existing), 0)
+        self.assert_length(created, 3)
+        self.assert_length(existing, 0)
 
         # Number of recipient ids will increase by 1 and not 3
         self._do_add_term_test(
             term,
-            "WHERE recipient_id IN (%(recipient_id_1)s, %(recipient_id_2)s, %(recipient_id_3)s, %(recipient_id_4)s, %(recipient_id_5)s, %(recipient_id_6)s)",
+            "WHERE recipient_id IN (%(recipient_id_1)s, %(recipient_id_2)s, %(recipient_id_3)s, %(recipient_id_4)s, %(recipient_id_5)s, %(recipient_id_6)s",
         )
 
     def test_add_term_using_streams_operator_and_public_stream_operand_negated(self) -> None:
@@ -195,8 +195,8 @@ class NarrowBuilderTest(ZulipTestCase):
         ]
         realm = get_realm("zulip")
         created, existing = create_streams_if_needed(realm, stream_dicts)
-        self.assertEqual(len(created), 3)
-        self.assertEqual(len(existing), 0)
+        self.assert_length(created, 3)
+        self.assert_length(existing, 0)
 
         # Number of recipient ids will increase by 1 and not 3
         self._do_add_term_test(
@@ -247,6 +247,14 @@ class NarrowBuilderTest(ZulipTestCase):
             param_2=0,
         )
         self._do_add_term_test(term, where_clause, params)
+
+    def test_add_term_using_is_operator_for_resolved_topics(self) -> None:
+        term = dict(operator="is", operand="resolved")
+        self._do_add_term_test(term, "WHERE (subject LIKE %(subject_1)s || '%%'")
+
+    def test_add_term_using_is_operator_for_negated_resolved_topics(self) -> None:
+        term = dict(operator="is", operand="resolved", negated=True)
+        self._do_add_term_test(term, "WHERE (subject NOT LIKE %(subject_1)s || '%%'")
 
     def test_add_term_using_non_supported_operator_should_raise_error(self) -> None:
         term = dict(operator="is", operand="non_supported")
@@ -527,7 +535,7 @@ class NarrowLibraryTest(ZulipTestCase):
         fixtures_path = os.path.join(os.path.dirname(__file__), "fixtures/narrow.json")
         with open(fixtures_path, "rb") as f:
             scenarios = orjson.loads(f.read())
-        self.assertTrue(len(scenarios) == 9)
+        self.assert_length(scenarios, 10)
         for scenario in scenarios:
             narrow = scenario["narrow"]
             accept_events = scenario["accept_events"]
@@ -661,6 +669,11 @@ class IncludeHistoryTest(ZulipTestCase):
         narrow = [
             dict(operator="streams", operand="public"),
             dict(operator="is", operand="alerted"),
+        ]
+        self.assertFalse(ok_to_include_history(narrow, user_profile, False))
+        narrow = [
+            dict(operator="streams", operand="public"),
+            dict(operator="is", operand="resolved"),
         ]
         self.assertFalse(ok_to_include_history(narrow, user_profile, False))
 
@@ -1342,7 +1355,7 @@ class GetOldMessagesTest(ZulipTestCase):
         self.assert_json_success(payload)
         result = orjson.loads(payload.content)
 
-        self.assertEqual(len(result["messages"]), len(message_ids))
+        self.assert_length(result["messages"], len(message_ids))
         for message in result["messages"]:
             assert message["id"] in message_ids
 
@@ -1354,7 +1367,7 @@ class GetOldMessagesTest(ZulipTestCase):
         self.assert_json_success(payload)
         result = orjson.loads(payload.content)
 
-        self.assertEqual(len(result["messages"]), len(message_ids[pivot_index:]))
+        self.assert_length(result["messages"], len(message_ids[pivot_index:]))
         for message in result["messages"]:
             assert message["id"] in message_ids
 
@@ -1406,9 +1419,15 @@ class GetOldMessagesTest(ZulipTestCase):
         """
         Test old `/json/messages` returns reactions.
         """
+        self.send_stream_message(self.example_user("iago"), "Verona")
+
         self.login("hamlet")
-        messages = self.get_and_check_messages({})
-        message_id = messages["messages"][0]["id"]
+
+        get_messages_params: Dict[str, Union[int, str]] = {"anchor": "newest", "num_before": 1}
+        messages = self.get_and_check_messages(get_messages_params)["messages"]
+        self.assert_length(messages, 1)
+        message_id = messages[0]["id"]
+        self.assert_length(messages[0]["reactions"], 0)
 
         self.login("othello")
         reaction_name = "thumbs_up"
@@ -1421,15 +1440,11 @@ class GetOldMessagesTest(ZulipTestCase):
         self.assert_json_success(payload)
 
         self.login("hamlet")
-        messages = self.get_and_check_messages({})
-        message_to_assert = None
-        for message in messages["messages"]:
-            if message["id"] == message_id:
-                message_to_assert = message
-                break
-        assert message_to_assert is not None
-        self.assertEqual(len(message_to_assert["reactions"]), 1)
-        self.assertEqual(message_to_assert["reactions"][0]["emoji_name"], reaction_name)
+        messages = self.get_and_check_messages(get_messages_params)["messages"]
+        self.assert_length(messages, 1)
+        self.assertEqual(messages[0]["id"], message_id)
+        self.assert_length(messages[0]["reactions"], 1)
+        self.assertEqual(messages[0]["reactions"][0]["emoji_name"], reaction_name)
 
     def test_successful_get_messages(self) -> None:
         """
@@ -1849,7 +1864,7 @@ class GetOldMessagesTest(ZulipTestCase):
         self.assert_json_success(payload)
         result = orjson.loads(payload.content)
         messages = result["messages"]
-        self.assertEqual(len(messages), 2)
+        self.assert_length(messages, 2)
 
         for message in messages:
             if message["id"] == old_message_id:
@@ -1925,7 +1940,7 @@ class GetOldMessagesTest(ZulipTestCase):
         messages = get_user_messages(self.mit_user("starnine"))
         stream_messages = [msg for msg in messages if msg.is_stream_message()]
 
-        self.assertEqual(len(result["messages"]), 2)
+        self.assert_length(result["messages"], 2)
         for i, message in enumerate(result["messages"]):
             self.assertEqual(message["type"], "stream")
             stream_id = stream_messages[i].recipient.id
@@ -1955,7 +1970,7 @@ class GetOldMessagesTest(ZulipTestCase):
 
         messages = get_user_messages(mit_user_profile)
         stream_messages = [msg for msg in messages if msg.is_stream_message()]
-        self.assertEqual(len(result["messages"]), 5)
+        self.assert_length(result["messages"], 5)
         for i, message in enumerate(result["messages"]):
             self.assertEqual(message["type"], "stream")
             stream_id = stream_messages[i].recipient.id
@@ -1989,7 +2004,7 @@ class GetOldMessagesTest(ZulipTestCase):
 
         messages = get_user_messages(mit_user_profile)
         stream_messages = [msg for msg in messages if msg.is_stream_message()]
-        self.assertEqual(len(result["messages"]), 7)
+        self.assert_length(result["messages"], 7)
         for i, message in enumerate(result["messages"]):
             self.assertEqual(message["type"], "stream")
             stream_id = stream_messages[i].recipient.id
@@ -2064,7 +2079,7 @@ class GetOldMessagesTest(ZulipTestCase):
         result = self.client_get("/json/messages/matches_narrow", params)
         self.assert_json_success(result)
         messages = result.json()["messages"]
-        self.assertEqual(len(list(messages.keys())), 1)
+        self.assert_length(list(messages.keys()), 1)
         message = messages[str(good_id)]
         self.assertEqual(
             message["match_content"],
@@ -2114,7 +2129,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_after=10,
             )
         )
-        self.assertEqual(len(result["messages"]), 2)
+        self.assert_length(result["messages"], 2)
         messages = result["messages"]
 
         narrow = [dict(operator="search", operand="https://google.com")]
@@ -2126,7 +2141,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_after=10,
             )
         )
-        self.assertEqual(len(link_search_result["messages"]), 1)
+        self.assert_length(link_search_result["messages"], 1)
         self.assertEqual(
             link_search_result["messages"][0]["match_content"],
             '<p><a href="https://google.com">https://<span class="highlight">google.com</span></a></p>',
@@ -2157,7 +2172,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(multi_search_result["messages"]), 1)
+        self.assert_length(multi_search_result["messages"], 1)
         self.assertEqual(
             multi_search_result["messages"][0]["match_content"],
             '<p><span class="highlight">discuss</span> lunch <span class="highlight">after</span> lunch</p>',
@@ -2175,7 +2190,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(result["messages"]), 4)
+        self.assert_length(result["messages"], 4)
         messages = result["messages"]
 
         japanese_message = [m for m in messages if m[TOPIC_NAME] == "日本"][-1]
@@ -2205,7 +2220,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(multi_search_result["messages"]), 1)
+        self.assert_length(multi_search_result["messages"], 1)
         self.assertEqual(
             multi_search_result["messages"][0]["match_content"],
             '<p>こんに <span class="highlight">ちは</span> 。 <span class="highlight">今日は</span> いい 天気ですね。</p>',
@@ -2269,7 +2284,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=10,
             )
         )
-        self.assertEqual(len(stream_search_result["messages"]), 1)
+        self.assert_length(stream_search_result["messages"], 1)
         self.assertEqual(
             stream_search_result["messages"][0]["match_content"],
             '<p>Public <span class="highlight">special</span> content!</p>',
@@ -2322,7 +2337,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(result["messages"]), 4)
+        self.assert_length(result["messages"], 4)
         messages = result["messages"]
 
         japanese_message = [m for m in messages if m[TOPIC_NAME] == "日本語"][-1]
@@ -2353,7 +2368,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(multi_search_result["messages"]), 1)
+        self.assert_length(multi_search_result["messages"], 1)
         self.assertEqual(
             multi_search_result["messages"][0]["match_content"],
             '<p><span class="highlight">Can</span> you <span class="highlight">speak</span> <a href="https://en.wikipedia.org/wiki/Japanese">https://en.<span class="highlight">wiki</span>pedia.org/<span class="highlight">wiki</span>/Japanese</a>?</p>',
@@ -2372,7 +2387,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(multi_search_result["messages"]), 1)
+        self.assert_length(multi_search_result["messages"], 1)
         self.assertEqual(
             multi_search_result["messages"][0]["match_content"],
             '<p>今<span class="highlight">朝は</span>ごはんを食<span class="highlight">べました</span>。</p>',
@@ -2387,7 +2402,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(link_search_result["messages"]), 1)
+        self.assert_length(link_search_result["messages"], 1)
         self.assertEqual(
             link_search_result["messages"][0]["match_content"],
             '<p><a href="https://google.com"><span class="highlight">https://google.com</span></a></p>',
@@ -2405,7 +2420,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(special_search_result["messages"]), 1)
+        self.assert_length(special_search_result["messages"], 1)
         self.assertEqual(
             special_search_result["messages"][0][MATCH_TOPIC],
             'bread &amp; <span class="highlight">butter</span>',
@@ -2422,7 +2437,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_before=0,
             )
         )
-        self.assertEqual(len(special_search_result["messages"]), 1)
+        self.assert_length(special_search_result["messages"], 1)
         self.assertEqual(
             special_search_result["messages"][0][MATCH_TOPIC],
             'bread <span class="highlight">&amp;</span> butter',
@@ -2459,7 +2474,7 @@ class GetOldMessagesTest(ZulipTestCase):
         result = self.client_get("/json/messages/matches_narrow", params)
         self.assert_json_success(result)
         messages = result.json()["messages"]
-        self.assertEqual(len(list(messages.keys())), 1)
+        self.assert_length(list(messages.keys()), 1)
         message = messages[str(good_id)]
         self.assertIn("a href=", message["match_content"])
         self.assertIn("http://foo.com", message["match_content"])
@@ -2485,17 +2500,33 @@ class GetOldMessagesTest(ZulipTestCase):
                 num_after=0,
             )
         )
-        self.assertEqual(len(result["messages"]), 1)
+        self.assert_length(result["messages"], 1)
 
         narrow = [dict(operator="is", operand="mentioned")]
         result = self.get_and_check_messages(
             dict(narrow=orjson.dumps(narrow).decode(), anchor=anchor, num_before=0, num_after=0)
         )
-        self.assertEqual(len(result["messages"]), 0)
+        self.assert_length(result["messages"], 0)
+
+    def test_get_messages_for_resolved_topics(self) -> None:
+        self.login("cordelia")
+        cordelia = self.example_user("cordelia")
+
+        self.send_stream_message(cordelia, "Verona", "whatever1")
+        resolved_topic_name = RESOLVED_TOPIC_PREFIX + "foo"
+        anchor = self.send_stream_message(cordelia, "Verona", "whatever2", resolved_topic_name)
+        self.send_stream_message(cordelia, "Verona", "whatever3")
+
+        narrow = [dict(operator="is", operand="resolved")]
+        result = self.get_and_check_messages(
+            dict(narrow=orjson.dumps(narrow).decode(), anchor=anchor, num_before=1, num_after=1)
+        )
+        self.assert_length(result["messages"], 1)
+        self.assertEqual(result["messages"][0]["id"], anchor)
 
     def test_get_visible_messages_with_anchor(self) -> None:
         def messages_matches_ids(messages: List[Dict[str, Any]], message_ids: List[int]) -> None:
-            self.assertEqual(len(messages), len(message_ids))
+            self.assert_length(messages, len(message_ids))
             for message in messages:
                 assert message["id"] in message_ids
 
@@ -3119,7 +3150,7 @@ class GetOldMessagesTest(ZulipTestCase):
 
         # Verify the query for old messages looks correct.
         queries = [q for q in all_queries if "/* get_messages */" in q["sql"]]
-        self.assertEqual(len(queries), 1)
+        self.assert_length(queries, 1)
         sql = queries[0]["sql"]
         self.assertNotIn(f"AND message_id = {LARGER_THAN_MAX_MESSAGE_ID}", sql)
         self.assertIn("ORDER BY message_id ASC", sql)
@@ -3165,7 +3196,7 @@ class GetOldMessagesTest(ZulipTestCase):
                 get_messages_backend(request, user_profile)
 
         queries = [q for q in all_queries if "/* get_messages */" in q["sql"]]
-        self.assertEqual(len(queries), 1)
+        self.assert_length(queries, 1)
         sql = queries[0]["sql"]
         self.assertNotIn(f"AND message_id = {LARGER_THAN_MAX_MESSAGE_ID}", sql)
         self.assertIn("ORDER BY message_id ASC", sql)
@@ -3189,7 +3220,7 @@ class GetOldMessagesTest(ZulipTestCase):
             get_messages_backend(request, user_profile)
 
         queries = [q for q in all_queries if "/* get_messages */" in q["sql"]]
-        self.assertEqual(len(queries), 1)
+        self.assert_length(queries, 1)
 
         sql = queries[0]["sql"]
 
@@ -3243,7 +3274,7 @@ class GetOldMessagesTest(ZulipTestCase):
         # Do some tests on the main query, to verify the muting logic
         # runs on this code path.
         queries = [q for q in all_queries if str(q["sql"]).startswith("SELECT message_id, flags")]
-        self.assertEqual(len(queries), 1)
+        self.assert_length(queries, 1)
 
         stream = get_stream("Scotland", realm)
         recipient_id = stream.recipient.id
@@ -3253,7 +3284,7 @@ class GetOldMessagesTest(ZulipTestCase):
         # Next, verify the use_first_unread_anchor setting invokes
         # the `message_id = LARGER_THAN_MAX_MESSAGE_ID` hack.
         queries = [q for q in all_queries if "/* get_messages */" in q["sql"]]
-        self.assertEqual(len(queries), 1)
+        self.assert_length(queries, 1)
         self.assertIn(f"AND zerver_message.id = {LARGER_THAN_MAX_MESSAGE_ID}", queries[0]["sql"])
 
     def test_exclude_muting_conditions(self) -> None:
@@ -3601,7 +3632,7 @@ WHERE user_profile_id = {hamlet_id} AND (content ILIKE '%jumping%' OR subject IL
                 num_after=10,
             )
         )
-        self.assertEqual(len(result["messages"]), 0)
+        self.assert_length(result["messages"], 0)
 
         narrow = [
             dict(operator="sender", operand=cordelia.email),
@@ -3614,7 +3645,7 @@ WHERE user_profile_id = {hamlet_id} AND (content ILIKE '%jumping%' OR subject IL
                 num_after=10,
             )
         )
-        self.assertEqual(len(result["messages"]), 1)
+        self.assert_length(result["messages"], 1)
         messages = result["messages"]
 
         (hello_message,) = [m for m in messages if m[TOPIC_NAME] == "say hello"]
@@ -3711,7 +3742,7 @@ class MessageHasKeywordsTest(ZulipTestCase):
     def update_message(self, msg: Message, content: str) -> None:
         hamlet = self.example_user("hamlet")
         realm_id = hamlet.realm.id
-        rendered_content = render_markdown(msg, content)
+        rendering_result = render_markdown(msg, content)
         mention_data = MentionData(realm_id, content)
         do_update_message(
             hamlet,
@@ -3722,8 +3753,7 @@ class MessageHasKeywordsTest(ZulipTestCase):
             False,
             False,
             content,
-            rendered_content,
-            set(),
+            rendering_result,
             set(),
             mention_data=mention_data,
         )

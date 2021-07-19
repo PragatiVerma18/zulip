@@ -32,13 +32,13 @@ from sqlalchemy.sql import (
 from sqlalchemy.types import Boolean, Integer, Text
 
 from zerver.context_processors import get_valid_realm_from_request
-from zerver.decorator import REQ, has_request_variables
 from zerver.lib.actions import recipient_for_user_profiles
 from zerver.lib.addressee import get_user_profiles, get_user_profiles_by_ids
 from zerver.lib.exceptions import ErrorCode, JsonableError, MissingAuthenticationError
 from zerver.lib.message import get_first_visible_message_id, messages_for_ids
 from zerver.lib.narrow import is_web_public_compatible, is_web_public_narrow
-from zerver.lib.response import json_error, json_success
+from zerver.lib.request import REQ, get_request_notes, has_request_variables
+from zerver.lib.response import json_success
 from zerver.lib.sqlalchemy_utils import get_sqlalchemy_connection
 from zerver.lib.streams import (
     can_access_stream_history_by_id,
@@ -47,7 +47,13 @@ from zerver.lib.streams import (
     get_stream_by_narrow_operand_access_unchecked,
     get_web_public_streams_queryset,
 )
-from zerver.lib.topic import DB_TOPIC_NAME, MATCH_TOPIC, topic_column_sa, topic_match_sa
+from zerver.lib.topic import (
+    DB_TOPIC_NAME,
+    MATCH_TOPIC,
+    get_resolved_topic_condition_sa,
+    topic_column_sa,
+    topic_match_sa,
+)
 from zerver.lib.topic_mutes import exclude_topic_mutes
 from zerver.lib.types import Validator
 from zerver.lib.utils import statsd
@@ -233,6 +239,9 @@ class NarrowBuilder:
             return query.where(maybe_negate(cond))
         elif operand == "alerted":
             cond = column("flags", Integer).op("&")(UserMessage.flags.has_alert_word.mask) != 0
+            return query.where(maybe_negate(cond))
+        elif operand == "resolved":
+            cond = get_resolved_topic_condition_sa()
             return query.where(maybe_negate(cond))
         raise BadNarrowOperator("unknown 'is' operand " + operand)
 
@@ -918,7 +927,7 @@ def parse_anchor_value(anchor_val: Optional[str], use_first_unread_anchor: bool)
         # We don't use `.isnumeric()` to support negative numbers for
         # anchor.  We don't recommend it in the API (if you want the
         # very first message, use 0 or 1), but it used to be supported
-        # and was used by the webapp, so we need to continue
+        # and was used by the web app, so we need to continue
         # supporting it for backwards-compatibility
         anchor = int(anchor_val)
         if anchor < 0:
@@ -946,7 +955,7 @@ def get_messages_backend(
 ) -> HttpResponse:
     anchor = parse_anchor_value(anchor_val, use_first_unread_anchor_val)
     if num_before + num_after > MAX_MESSAGES_PER_FETCH:
-        return json_error(
+        raise JsonableError(
             _("Too many messages requested (maximum {}).").format(
                 MAX_MESSAGES_PER_FETCH,
             )
@@ -1034,7 +1043,9 @@ def get_messages_backend(
                 verbose_operators.append("is:" + term["operand"])
             else:
                 verbose_operators.append(term["operator"])
-        request._log_data["extra"] = "[{}]".format(",".join(verbose_operators))
+        log_data = get_request_notes(request).log_data
+        assert log_data is not None
+        log_data["extra"] = "[{}]".format(",".join(verbose_operators))
 
     sa_conn = get_sqlalchemy_connection()
 
@@ -1095,7 +1106,7 @@ def get_messages_backend(
     message_ids: List[int] = []
     user_message_flags: Dict[int, List[str]] = {}
     if is_web_public_query:
-        # For web-public users, we treat all historical messages as read.
+        # For spectators, we treat all historical messages as read.
         for row in rows:
             message_id = row[0]
             message_ids.append(message_id)

@@ -12,7 +12,7 @@ const {page_params} = require("../zjsunit/zpage_params");
 const timerender = mock_esm("../../static/js/timerender");
 
 const compose_fade_helper = zrequire("compose_fade_helper");
-const muting = zrequire("muting");
+const muted_users = zrequire("muted_users");
 const peer_data = zrequire("peer_data");
 const people = zrequire("people");
 const presence = zrequire("presence");
@@ -96,7 +96,7 @@ function add_canned_users() {
 }
 
 function test(label, f) {
-    run_test(label, (override) => {
+    run_test(label, ({override}) => {
         compose_fade_helper.clear_focused_recipient();
         stream_data.clear_subscriptions();
         peer_data.clear_for_testing();
@@ -105,8 +105,8 @@ function test(label, f) {
         people.init();
         people.add_active_user(me);
         people.initialize_current_user(me.user_id);
-        muting.set_muted_users([]);
-        f(override);
+        muted_users.set_muted_users([]);
+        f({override});
     });
 }
 
@@ -155,23 +155,36 @@ function set_presence(user_id, status) {
     });
 }
 
-test("user_circle", () => {
+test("user_circle, level, status_description", () => {
     add_canned_users();
 
     set_presence(selma.user_id, "active");
-    set_presence(me.user_id, "active");
-
     assert.equal(buddy_data.get_user_circle_class(selma.user_id), "user_circle_green");
     user_status.set_away(selma.user_id);
+    assert.equal(buddy_data.level(selma.user_id), 3);
+
     assert.equal(buddy_data.get_user_circle_class(selma.user_id), "user_circle_empty_line");
     user_status.revoke_away(selma.user_id);
     assert.equal(buddy_data.get_user_circle_class(selma.user_id), "user_circle_green");
+    assert.equal(buddy_data.status_description(selma.user_id), "translated: Active");
 
+    set_presence(me.user_id, "active");
     assert.equal(buddy_data.get_user_circle_class(me.user_id), "user_circle_green");
     user_status.set_away(me.user_id);
+    assert.equal(buddy_data.status_description(me.user_id), "translated: Unavailable");
+    assert.equal(buddy_data.level(me.user_id), 0);
+
     assert.equal(buddy_data.get_user_circle_class(me.user_id), "user_circle_empty_line");
     user_status.revoke_away(me.user_id);
     assert.equal(buddy_data.get_user_circle_class(me.user_id), "user_circle_green");
+
+    set_presence(fred.user_id, "idle");
+    assert.equal(buddy_data.get_user_circle_class(fred.user_id), "user_circle_orange");
+    assert.equal(buddy_data.level(fred.user_id), 2);
+    assert.equal(buddy_data.status_description(fred.user_id), "translated: Idle");
+
+    set_presence(fred.user_id, undefined);
+    assert.equal(buddy_data.status_description(fred.user_id), "translated: Offline");
 });
 
 test("compose fade interactions (streams)", () => {
@@ -374,14 +387,19 @@ test("simple search", () => {
 });
 
 test("muted users excluded from search", () => {
-    muting.add_muted_user(selma.user_id);
+    people.add_active_user(selma);
+    muted_users.add_muted_user(selma.user_id);
 
     let user_ids = buddy_data.get_filtered_and_sorted_user_ids();
     assert.equal(user_ids.includes(selma.user_id), false);
     user_ids = buddy_data.get_filtered_and_sorted_user_ids("sel");
     assert.deepEqual(user_ids, []);
+    assert.ok(!buddy_data.matches_filter("sel", selma.user_id));
 
-    muting.remove_muted_user(selma.user_id);
+    muted_users.remove_muted_user(selma.user_id);
+    user_ids = buddy_data.get_filtered_and_sorted_user_ids("sel");
+    assert.deepEqual(user_ids, [selma.user_id]);
+    assert.ok(buddy_data.matches_filter("sel", selma.user_id));
 });
 
 test("bulk_data_hacks", () => {
@@ -443,6 +461,19 @@ test("bulk_data_hacks", () => {
     assert.equal(user_ids.length, 700);
 });
 
+test("always show me", ({override}) => {
+    const present_user_ids = [];
+    override(presence, "get_user_ids", () => present_user_ids);
+    assert.deepEqual(buddy_data.get_filtered_and_sorted_user_ids(""), [me.user_id]);
+
+    // Make sure we didn't mutate the list passed to us.
+    assert.deepEqual(present_user_ids, []);
+
+    // try to make us show twice
+    present_user_ids.push(me.user_id);
+    assert.deepEqual(buddy_data.get_filtered_and_sorted_user_ids(""), [me.user_id]);
+});
+
 test("user_status", () => {
     user_status.initialize({user_status: []});
     set_presence(me.user_id, "active");
@@ -480,18 +511,21 @@ test("level", () => {
     assert.equal(buddy_data.level(selma.user_id), 3);
 });
 
-test("user_last_seen_time_status", (override) => {
+test("user_last_seen_time_status", ({override}) => {
     set_presence(selma.user_id, "active");
     set_presence(me.user_id, "active");
 
     assert.equal(buddy_data.user_last_seen_time_status(selma.user_id), "translated: Active now");
 
     page_params.realm_is_zephyr_mirror_realm = true;
-    assert.equal(buddy_data.user_last_seen_time_status(old_user.user_id), "translated: Unknown");
+    assert.equal(
+        buddy_data.user_last_seen_time_status(old_user.user_id),
+        "translated: Last active: translated: Unknown",
+    );
     page_params.realm_is_zephyr_mirror_realm = false;
     assert.equal(
         buddy_data.user_last_seen_time_status(old_user.user_id),
-        "translated: More than 2 weeks ago",
+        "translated: Last active: translated: More than 2 weeks ago",
     );
 
     override(presence, "last_active_date", (user_id) => {
@@ -504,10 +538,59 @@ test("user_last_seen_time_status", (override) => {
         return "May 12";
     });
 
-    assert.equal(buddy_data.user_last_seen_time_status(old_user.user_id), "May 12");
+    assert.equal(
+        buddy_data.user_last_seen_time_status(old_user.user_id),
+        "translated: Last active: May 12",
+    );
+
+    set_presence(selma.user_id, "idle");
+    assert.equal(buddy_data.user_last_seen_time_status(selma.user_id), "translated: Idle");
 });
 
-test("error handling", (override) => {
+test("get_items_for_users", () => {
+    people.add_active_user(alice);
+    people.add_active_user(fred);
+    user_status.set_away(alice.user_id);
+
+    const user_ids = [me.user_id, alice.user_id, fred.user_id];
+    assert.deepEqual(buddy_data.get_items_for_users(user_ids), [
+        {
+            faded: false,
+            href: "#narrow/pm-with/1001-self",
+            is_current_user: true,
+            my_user_status: "translated: (you)",
+            name: "Human Myself",
+            num_unread: 0,
+            user_circle_class: "user_circle_green",
+            user_circle_status: "translated: Active",
+            user_id: 1001,
+        },
+        {
+            faded: false,
+            href: "#narrow/pm-with/1002-alice",
+            is_current_user: false,
+            my_user_status: undefined,
+            name: "Alice Smith",
+            num_unread: 0,
+            user_circle_class: "user_circle_empty_line",
+            user_circle_status: "translated: Unavailable",
+            user_id: 1002,
+        },
+        {
+            faded: false,
+            href: "#narrow/pm-with/1003-fred",
+            is_current_user: false,
+            my_user_status: undefined,
+            name: "Fred Flintstone",
+            num_unread: 0,
+            user_circle_class: "user_circle_empty",
+            user_circle_status: "translated: Offline",
+            user_id: 1003,
+        },
+    ]);
+});
+
+test("error handling", ({override}) => {
     override(presence, "get_user_ids", () => [42]);
     blueslip.expect("error", "Unknown user_id in get_by_user_id: 42");
     blueslip.expect("warn", "Got user_id in presence but not people: 42");

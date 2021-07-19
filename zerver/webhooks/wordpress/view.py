@@ -3,8 +3,9 @@ from django.http import HttpRequest, HttpResponse
 from django.utils.translation import gettext as _
 
 from zerver.decorator import webhook_view
+from zerver.lib.exceptions import JsonableError
 from zerver.lib.request import REQ, has_request_variables
-from zerver.lib.response import json_error, json_success
+from zerver.lib.response import json_success
 from zerver.lib.webhooks.common import check_send_webhook_message
 from zerver.models import UserProfile
 
@@ -25,13 +26,13 @@ WP_LOGIN_TEMPLATE = "User {name} logged in."
 def api_wordpress_webhook(
     request: HttpRequest,
     user_profile: UserProfile,
-    hook: str = REQ(default="WordPress Action"),
-    post_title: str = REQ(default="New WordPress Post"),
+    hook: str = REQ(default="WordPress action"),
+    post_title: str = REQ(default="New WordPress post"),
     post_type: str = REQ(default="post"),
-    post_url: str = REQ(default="WordPress Post URL"),
-    display_name: str = REQ(default="New User Name"),
-    user_email: str = REQ(default="New User Email"),
-    user_login: str = REQ(default="Logged in User"),
+    post_url: str = REQ(default="WordPress post URL"),
+    display_name: str = REQ(default="New user name"),
+    user_email: str = REQ(default="New user email"),
+    user_login: str = REQ(default="Logged in user"),
 ) -> HttpResponse:
     # remove trailing whitespace (issue for some test fixtures)
     hook = hook.rstrip()
@@ -46,9 +47,9 @@ def api_wordpress_webhook(
         data = WP_LOGIN_TEMPLATE.format(name=user_login)
 
     else:
-        return json_error(_("Unknown WordPress webhook action: {}").format(hook))
+        raise JsonableError(_("Unknown WordPress webhook action: {}").format(hook))
 
-    topic = "WordPress Notification"
+    topic = "WordPress notification"
 
     check_send_webhook_message(request, user_profile, topic, data)
     return json_success()

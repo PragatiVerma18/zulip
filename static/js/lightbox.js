@@ -1,5 +1,7 @@
 import $ from "jquery";
 
+import render_lightbox_overlay from "../templates/lightbox_overlay.hbs";
+
 import * as blueslip from "./blueslip";
 import {LightboxCanvas} from "./lightbox_canvas";
 import * as message_store from "./message_store";
@@ -79,18 +81,22 @@ function display_video(payload) {
     ).hide();
 
     let source;
-    if (payload.type === "youtube-video") {
-        source = "https://www.youtube.com/embed/" + payload.source;
-    } else if (payload.type === "vimeo-video") {
-        source = "https://player.vimeo.com/video/" + payload.source;
-    } else if (payload.type === "embed-video") {
-        // Use data: to load the player in a unique origin for security.
-        source =
-            "data:text/html," +
-            window.encodeURIComponent(
-                "<!DOCTYPE html><style>iframe{position:absolute;left:0;top:0;width:100%;height:100%;box-sizing:border-box}</style>" +
-                    payload.source,
-            );
+    switch (payload.type) {
+        case "youtube-video":
+            source = "https://www.youtube.com/embed/" + payload.source;
+            break;
+        case "vimeo-video":
+            source = "https://player.vimeo.com/video/" + payload.source;
+            break;
+        case "embed-video":
+            // Use data: to load the player in a unique origin for security.
+            source =
+                "data:text/html," +
+                window.encodeURIComponent(
+                    "<!DOCTYPE html><style>iframe{position:absolute;left:0;top:0;width:100%;height:100%;box-sizing:border-box}</style>" +
+                        payload.source,
+                );
+            break;
     }
 
     const iframe = $("<iframe></iframe>");
@@ -234,7 +240,6 @@ export function parse_image_data(image) {
         $source = $parent.attr("data-id");
     } else {
         $type = "image";
-        // thumbor supplies the src as thumbnail, data-src-fullsize as full-sized.
         if ($image.attr("data-src-fullsize")) {
             $source = $image.attr("data-src-fullsize");
         } else {
@@ -277,6 +282,9 @@ export function next() {
 
 // this is a block of events that are required for the lightbox to work.
 export function initialize() {
+    const rendered_lightbox_overlay = render_lightbox_overlay();
+    $("body").append(rendered_lightbox_overlay);
+
     $("#main_div, #compose .preview_content").on("click", ".message_inline_image a", function (e) {
         // prevent the link from opening in a new page.
         e.preventDefault();

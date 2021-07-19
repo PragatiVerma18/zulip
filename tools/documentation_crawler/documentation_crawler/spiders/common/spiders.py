@@ -13,10 +13,10 @@ from scrapy.utils.url import url_has_any_extension
 from twisted.python.failure import Failure
 
 EXCLUDED_DOMAINS = [
-    # Returns 429 Rate-Limited Errors
+    # Returns 429 rate-limiting errors
     "github.com",
     "gist.github.com",
-    # Returns 503 Errors
+    # Returns 503 errors
     "www.amazon.com",
     "gitlab.com",
 ]
@@ -134,10 +134,10 @@ class BaseDocumentationSpider(scrapy.Spider):
         return callback
 
     def _make_requests(self, url: str) -> Iterator[Request]:
-        # These URLs are for Zulip's webapp, which with recent changes
+        # These URLs are for Zulip's web app, which with recent changes
         # can be accessible without logging into an account.  While we
-        # do crawl documentation served by the webapp (e.g. /help/),
-        # we don't want to crawl the webapp itself, so we exclude
+        # do crawl documentation served by the web app (e.g. /help/),
+        # we don't want to crawl the web app itself, so we exclude
         # these.
         if (
             url in ["http://localhost:9981/", "http://localhost:9981"]

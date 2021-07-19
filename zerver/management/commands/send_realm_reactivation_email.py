@@ -1,15 +1,17 @@
 from argparse import ArgumentParser
 from typing import Any
 
+from django.core.management.base import CommandError
+
 from zerver.lib.actions import do_send_realm_reactivation_email
-from zerver.lib.management import CommandError, ZulipBaseCommand
+from zerver.lib.management import ZulipBaseCommand
 
 
 class Command(ZulipBaseCommand):
     help = """Sends realm reactivation email to admins"""
 
     def add_arguments(self, parser: ArgumentParser) -> None:
-        self.add_realm_args(parser, True)
+        self.add_realm_args(parser, required=True)
 
     def handle(self, *args: Any, **options: str) -> None:
         realm = self.get_realm(options)

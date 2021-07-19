@@ -2,7 +2,7 @@
 
 const {strict: assert} = require("assert");
 
-const {mock_cjs, mock_esm, set_global, zrequire} = require("../zjsunit/namespace");
+const {mock_esm, set_global, zrequire} = require("../zjsunit/namespace");
 const {make_stub} = require("../zjsunit/stub");
 const {run_test} = require("../zjsunit/test");
 const blueslip = require("../zjsunit/zblueslip");
@@ -15,10 +15,6 @@ const {page_params} = require("../zjsunit/zpage_params");
 
 const noop = function () {};
 
-mock_cjs("jquery", $);
-mock_esm("../../static/js/filter", {
-    Filter: noop,
-});
 set_global("document", {
     to_$() {
         return {
@@ -31,17 +27,10 @@ const narrow_state = mock_esm("../../static/js/narrow_state");
 const stream_data = mock_esm("../../static/js/stream_data");
 
 const {MessageList} = zrequire("message_list");
+const {Filter} = zrequire("filter");
 
-function accept_all_filter() {
-    const filter = {
-        predicate: () => () => true,
-    };
-
-    return filter;
-}
-
-run_test("basics", (override) => {
-    const filter = accept_all_filter();
+run_test("basics", ({override}) => {
+    const filter = new Filter();
 
     const list = new MessageList({
         filter,
@@ -310,7 +299,7 @@ run_test("local_echo", () => {
     assert.equal(list.closest_id(50.01), 50.01);
 });
 
-run_test("bookend", (override) => {
+run_test("bookend", ({override}) => {
     const list = new MessageList({});
 
     let expected = "translated: You subscribed to stream IceCream";
@@ -384,9 +373,10 @@ run_test("bookend", (override) => {
 });
 
 run_test("add_remove_rerender", () => {
-    const filter = accept_all_filter();
-
-    const list = new MessageList({filter});
+    const filter = new Filter();
+    const list = new MessageList({
+        filter,
+    });
 
     const messages = [{id: 1}, {id: 2}, {id: 3}];
 

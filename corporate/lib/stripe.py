@@ -5,13 +5,14 @@ import secrets
 from datetime import datetime, timedelta
 from decimal import Decimal
 from functools import wraps
-from typing import Callable, Dict, Optional, Tuple, TypeVar, cast
+from typing import Callable, Dict, Generator, Optional, Tuple, TypeVar, cast
 
 import orjson
 import stripe
 from django.conf import settings
 from django.core.signing import Signer
 from django.db import transaction
+from django.urls import reverse
 from django.utils.timezone import now as timezone_now
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy
@@ -25,7 +26,9 @@ from corporate.models import (
     get_current_plan_by_realm,
     get_customer_by_realm,
 )
+from zerver.lib.exceptions import JsonableError
 from zerver.lib.logging_util import log_to_file
+from zerver.lib.send_email import FromAddress, send_email_to_billing_admins_and_realm_owners
 from zerver.lib.timestamp import datetime_to_timestamp, timestamp_to_datetime
 from zerver.models import Realm, RealmAuditLog, UserProfile, get_system_bot
 from zproject.config import get_secret
@@ -69,6 +72,26 @@ def sign_string(string: str) -> Tuple[str, str]:
 def unsign_string(signed_string: str, salt: str) -> str:
     signer = Signer(salt=salt)
     return signer.unsign(signed_string)
+
+
+def validate_licenses(charge_automatically: bool, licenses: Optional[int], seat_count: int) -> None:
+    min_licenses = seat_count
+    max_licenses = None
+    if not charge_automatically:
+        min_licenses = max(seat_count, MIN_INVOICED_LICENSES)
+        max_licenses = MAX_INVOICED_LICENSES
+
+    if licenses is None or licenses < min_licenses:
+        raise BillingError(
+            "not enough licenses", _("You must invoice for at least {} users.").format(min_licenses)
+        )
+
+    if max_licenses is not None and licenses > max_licenses:
+        message = _(
+            "Invoices with more than {} licenses can't be processed from this page. To complete "
+            "the upgrade, please contact {}."
+        ).format(max_licenses, settings.ZULIP_ADMINISTRATOR)
+        raise BillingError("too many licenses", message)
 
 
 # Be extremely careful changing this function. Historical billing periods
@@ -116,7 +139,7 @@ def next_month(billing_cycle_anchor: datetime, dt: datetime) -> datetime:
 
 
 def start_of_next_billing_cycle(plan: CustomerPlan, event_time: datetime) -> datetime:
-    if plan.status == CustomerPlan.FREE_TRIAL:
+    if plan.is_free_trial():
         assert plan.next_invoice_date is not None  # for mypy
         return plan.next_invoice_date
 
@@ -170,17 +193,26 @@ def get_idempotency_key(ledger_entry: LicenseLedger) -> Optional[str]:
     return f"ledger_entry:{ledger_entry.id}"  # nocoverage
 
 
-class BillingError(Exception):
+def cents_to_dollar_string(cents: int) -> str:
+    return f"{cents / 100.:,.2f}"
+
+
+class BillingError(JsonableError):
+    data_fields = ["error_description"]
     # error messages
     CONTACT_SUPPORT = gettext_lazy("Something went wrong. Please contact {email}.")
     TRY_RELOADING = gettext_lazy("Something went wrong. Please reload the page.")
 
     # description is used only for tests
     def __init__(self, description: str, message: Optional[str] = None) -> None:
-        self.description = description
+        self.error_description = description
         if message is None:
             message = BillingError.CONTACT_SUPPORT.format(email=settings.ZULIP_ADMINISTRATOR)
-        self.message = message
+        super().__init__(message)
+
+
+class LicenseLimitError(Exception):
+    pass
 
 
 class StripeCardError(BillingError):
@@ -279,8 +311,9 @@ def do_create_stripe_customer(user: UserProfile, stripe_token: Optional[str] = N
         customer, created = Customer.objects.update_or_create(
             realm=realm, defaults={"stripe_customer_id": stripe_customer.id}
         )
-        user.is_billing_admin = True
-        user.save(update_fields=["is_billing_admin"])
+        from zerver.lib.actions import do_make_user_billing_admin
+
+        do_make_user_billing_admin(user)
     return customer
 
 
@@ -290,6 +323,7 @@ def do_replace_payment_source(
 ) -> stripe.Customer:
     customer = get_customer_by_realm(user.realm)
     assert customer is not None  # for mypy
+    assert customer.stripe_customer_id is not None  # for mypy
 
     stripe_customer = stripe_get_customer(customer.stripe_customer_id)
     stripe_customer.source = stripe_token
@@ -313,6 +347,19 @@ def do_replace_payment_source(
     return updated_stripe_customer
 
 
+def stripe_customer_has_credit_card_as_default_source(stripe_customer: stripe.Customer) -> bool:
+    if not stripe_customer.default_source:
+        return False
+    return stripe_customer.default_source.object == "card"
+
+
+def customer_has_credit_card_as_default_source(customer: Customer) -> bool:
+    if not customer.stripe_customer_id:
+        return False
+    stripe_customer = stripe_get_customer(customer.stripe_customer_id)
+    return stripe_customer_has_credit_card_as_default_source(stripe_customer)
+
+
 # event_time should roughly be timezone_now(). Not designed to handle
 # event_times in the past or future
 @transaction.atomic
@@ -333,7 +380,7 @@ def make_end_of_cycle_updates_if_needed(
                 licenses=last_ledger_entry.licenses_at_next_renewal,
                 licenses_at_next_renewal=last_ledger_entry.licenses_at_next_renewal,
             )
-        if plan.status == CustomerPlan.FREE_TRIAL:
+        if plan.is_free_trial():
             plan.invoiced_through = last_ledger_entry
             assert plan.next_invoice_date is not None
             plan.billing_cycle_anchor = plan.next_invoice_date.replace(microsecond=0)
@@ -476,6 +523,10 @@ def decimal_to_float(obj: object) -> object:
     raise TypeError  # nocoverage
 
 
+def is_free_trial_offer_enabled() -> bool:
+    return settings.FREE_TRIAL_DAYS not in (None, 0)
+
+
 # Only used for cloud signups
 @catch_stripe_errors
 def process_initial_upgrade(
@@ -487,8 +538,10 @@ def process_initial_upgrade(
 ) -> None:
     realm = user.realm
     customer = update_or_create_stripe_customer(user, stripe_token=stripe_token)
+    assert customer.stripe_customer_id is not None  # for mypy
+
     charge_automatically = stripe_token is not None
-    free_trial = settings.FREE_TRIAL_DAYS not in (None, 0)
+    free_trial = is_free_trial_offer_enabled()
 
     if get_current_plan_by_customer(customer) is not None:
         # Unlikely race condition from two people upgrading (clicking "Make payment")
@@ -609,6 +662,30 @@ def process_initial_upgrade(
     do_change_plan_type(realm, Realm.STANDARD, acting_user=user)
 
 
+def update_license_ledger_for_manual_plan(
+    plan: CustomerPlan,
+    event_time: datetime,
+    licenses: Optional[int] = None,
+    licenses_at_next_renewal: Optional[int] = None,
+) -> None:
+    if licenses is not None:
+        assert get_latest_seat_count(plan.customer.realm) <= licenses
+        assert licenses > plan.licenses()
+        LicenseLedger.objects.create(
+            plan=plan, event_time=event_time, licenses=licenses, licenses_at_next_renewal=licenses
+        )
+    elif licenses_at_next_renewal is not None:
+        assert get_latest_seat_count(plan.customer.realm) <= licenses_at_next_renewal
+        LicenseLedger.objects.create(
+            plan=plan,
+            event_time=event_time,
+            licenses=plan.licenses(),
+            licenses_at_next_renewal=licenses_at_next_renewal,
+        )
+    else:
+        raise AssertionError("Pass licenses or licenses_at_next_renewal")
+
+
 def update_license_ledger_for_automanaged_plan(
     realm: Realm, plan: CustomerPlan, event_time: datetime
 ) -> None:
@@ -640,6 +717,11 @@ def update_license_ledger_if_needed(realm: Realm, event_time: datetime) -> None:
 def invoice_plan(plan: CustomerPlan, event_time: datetime) -> None:
     if plan.invoicing_status == CustomerPlan.STARTED:
         raise NotImplementedError("Plan with invoicing_status==STARTED needs manual resolution.")
+    if not plan.customer.stripe_customer_id:
+        raise BillingError(
+            f"Realm {plan.customer.realm.string_id} has a paid plan without a Stripe customer."
+        )
+
     make_end_of_cycle_updates_if_needed(plan, event_time)
 
     if plan.invoicing_status == CustomerPlan.INITIAL_INVOICE_TO_BE_SENT:
@@ -736,6 +818,11 @@ def invoice_plans_as_needed(event_time: datetime = timezone_now()) -> None:
         invoice_plan(plan, event_time)
 
 
+def is_realm_on_free_trial(realm: Realm) -> bool:
+    plan = get_current_plan_by_realm(realm)
+    return plan is not None and plan.is_free_trial()
+
+
 def attach_discount_to_realm(
     realm: Realm, discount: Decimal, *, acting_user: Optional[UserProfile]
 ) -> None:
@@ -793,8 +880,8 @@ def approve_sponsorship(realm: Realm, *, acting_user: Optional[UserProfile]) -> 
             event_time=timezone_now(),
         )
     notification_bot = get_system_bot(settings.NOTIFICATION_BOT)
-    for billing_admin in realm.get_human_billing_admin_users():
-        with override_language(billing_admin.default_language):
+    for user in realm.get_human_billing_admin_and_realm_owner_users():
+        with override_language(user.default_language):
             # Using variable to make life easier for translators if these details change.
             plan_name = "Zulip Cloud Standard"
             emoji = ":tada:"
@@ -802,7 +889,11 @@ def approve_sponsorship(realm: Realm, *, acting_user: Optional[UserProfile]) -> 
                 f"Your organization's request for sponsored hosting has been approved! {emoji}.\n"
                 f"You have been upgraded to {plan_name}, free of charge."
             )
-            internal_send_private_message(notification_bot, billing_admin, message)
+            internal_send_private_message(notification_bot, user, message)
+
+
+def is_sponsored_realm(realm: Realm) -> bool:
+    return realm.plan_type == Realm.STANDARD_FREE
 
 
 def get_discount_for_realm(realm: Realm) -> Optional[Decimal]:
@@ -846,6 +937,14 @@ def estimate_annual_recurring_revenue_by_realm() -> Dict[str, int]:  # nocoverag
     return annual_revenue
 
 
+def get_realms_to_default_discount_dict() -> Dict[str, Decimal]:
+    realms_to_default_discount = {}
+    customers = Customer.objects.exclude(default_discount=None).exclude(default_discount=0)
+    for customer in customers:
+        realms_to_default_discount[customer.realm.string_id] = customer.default_discount
+    return realms_to_default_discount
+
+
 # During realm deactivation we instantly downgrade the plan to Limited.
 # Extra users added in the final month are not charged. Also used
 # for the cancellation of Free Trial.
@@ -866,17 +965,71 @@ def downgrade_at_the_end_of_billing_cycle(realm: Realm) -> None:
     do_change_plan_status(plan, CustomerPlan.DOWNGRADE_AT_END_OF_CYCLE)
 
 
+def get_all_invoices_for_customer(customer: Customer) -> Generator[stripe.Invoice, None, None]:
+    if customer.stripe_customer_id is None:
+        return
+
+    invoices = stripe.Invoice.list(customer=customer.stripe_customer_id, limit=100)
+    while len(invoices):
+        for invoice in invoices:
+            yield invoice
+            last_invoice = invoice
+        invoices = stripe.Invoice.list(
+            customer=customer.stripe_customer_id, starting_after=last_invoice, limit=100
+        )
+
+
 def void_all_open_invoices(realm: Realm) -> int:
     customer = get_customer_by_realm(realm)
     if customer is None:
         return 0
-    invoices = stripe.Invoice.list(customer=customer.stripe_customer_id)
+    invoices = get_all_invoices_for_customer(customer)
     voided_invoices_count = 0
     for invoice in invoices:
         if invoice.status == "open":
             stripe.Invoice.void_invoice(invoice.id)
             voided_invoices_count += 1
     return voided_invoices_count
+
+
+def downgrade_small_realms_behind_on_payments_as_needed() -> None:
+    customers = Customer.objects.all()
+    for customer in customers:
+        realm = customer.realm
+
+        # For larger realms, we generally want to talk to the customer
+        # before downgrading; so this logic only applies with 5.
+        if get_latest_seat_count(realm) >= 5:
+            continue
+
+        if get_current_plan_by_customer(customer) is None:
+            continue
+
+        due_invoice_count = 0
+        for invoice in stripe.Invoice.list(customer=customer.stripe_customer_id, limit=2):
+            if invoice.status == "open":
+                due_invoice_count += 1
+
+        # Customers with only 1 overdue invoice are ignored.
+        if due_invoice_count < 2:
+            continue
+
+        # We've now decided to downgrade this customer and void all invoices, and the below will execute this.
+
+        downgrade_now_without_creating_additional_invoices(realm)
+        void_all_open_invoices(realm)
+        context: Dict[str, str] = {
+            "upgrade_url": f"{realm.uri}{reverse('initial_upgrade')}",
+            "realm": realm,
+        }
+        send_email_to_billing_admins_and_realm_owners(
+            "zerver/emails/realm_auto_downgraded",
+            realm,
+            from_name=FromAddress.security_email_from_name(language=realm.default_language),
+            from_address=FromAddress.tokenized_no_reply_address(),
+            language=realm.default_language,
+            context=context,
+        )
 
 
 def update_billing_method_of_current_plan(

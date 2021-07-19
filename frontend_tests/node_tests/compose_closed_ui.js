@@ -3,30 +3,38 @@
 // Setup
 const {strict: assert} = require("assert");
 
-const {mock_cjs, mock_esm, set_global, zrequire} = require("../zjsunit/namespace");
+const {mock_esm, set_global, zrequire} = require("../zjsunit/namespace");
 const {run_test} = require("../zjsunit/test");
 const $ = require("../zjsunit/zjquery");
 
+mock_esm("../../static/js/recent_topics_util", {
+    is_visible: () => false,
+});
+
 // Mocking and stubbing things
-mock_cjs("jquery", $);
 set_global("document", "document-stub");
 const message_lists = mock_esm("../../static/js/message_lists");
 
 // Code we're actually using/testing
 const compose_closed_ui = zrequire("compose_closed_ui");
+const {Filter} = zrequire("filter");
 const {MessageList} = zrequire("message_list");
 
 // Helper test function
 function test_reply_label(expected_label) {
-    const label = $(".compose_reply_button_recipient_label").text();
-    assert.equal(label, expected_label, "'" + label + "' did not match '" + expected_label + "'");
+    const label = $(".compose_reply_button_label").text();
+    const prepend_text_length = "translated: Message ".length;
+    assert.equal(
+        label.slice(prepend_text_length),
+        expected_label,
+        "'" + label.slice(prepend_text_length),
+        Number("' did not match '") + expected_label + "'",
+    );
 }
 
 run_test("reply_label", () => {
     // Mocking up a test message list
-    const filter = {
-        predicate: () => () => true,
-    };
+    const filter = new Filter();
     const list = new MessageList({
         filter,
     });
@@ -85,4 +93,19 @@ run_test("reply_label", () => {
         }
         test_reply_label(expected_label);
     }
+});
+
+run_test("test_custom_message_input", () => {
+    compose_closed_ui.update_reply_recipient_label({
+        stream: "stream test",
+        topic: "topic test",
+    });
+    test_reply_label("#stream test > topic test");
+});
+
+run_test("empty_narrow", () => {
+    message_lists.current.empty = () => true;
+    compose_closed_ui.update_reply_recipient_label();
+    const label = $(".compose_reply_button_label").text();
+    assert.equal(label, "translated: Compose message");
 });

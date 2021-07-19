@@ -7,6 +7,7 @@ $left_col_size: 19px;
 /* The full topic indentation includes 4px of indent in addition to
    the above (and another 5px of padding not measured here) */
 $topic_indent: calc($far_left_gutter_size + $left_col_size + 4px);
+$topic_resolve_width: 13px;
 
 #left-sidebar {
     #user-list {
@@ -45,7 +46,6 @@ $topic_indent: calc($far_left_gutter_size + $left_col_size + 4px);
 
 #stream_filters,
 #global_filters {
-    font-size: 14px;
     margin-right: 12px;
 }
 
@@ -56,17 +56,24 @@ li.show-more-topics {
 }
 
 #streams_inline_cog,
-#streams_filter_icon {
+.streams_filter_icon {
     float: right;
     opacity: 0.5;
-    font-size: 13px;
-    margin-top: 3px;
-    margin-left: 10px;
+    padding: 3px;
+    margin-left: 7px;
 
     &:hover {
         opacity: 1;
         cursor: pointer;
     }
+}
+
+.streams_inline_cog_wrapper {
+    float: right;
+}
+
+.streams_filter_icon.web_public {
+    margin-right: 10px;
 }
 
 #streams_inline_cog {
@@ -96,7 +103,16 @@ li.show-more-topics {
                 padding-top: 2px;
                 padding-right: 0;
                 padding-bottom: 2px;
-                padding-left: $topic_indent;
+                padding-left: calc($topic_indent - $topic_resolve_width);
+
+                &.filter-topics {
+                    padding-bottom: 0;
+                }
+
+                .input-append.topic_search_section {
+                    margin-bottom: 3px;
+                    margin-left: 3px;
+                }
             }
         }
     }
@@ -161,7 +177,7 @@ li.show-more-topics {
 }
 
 #private-container {
-    max-height: 200px;
+    max-height: 210px;
 
     /* Match the opacity for global-filters icons. */
     span.fa-group {
@@ -317,6 +333,14 @@ li.top_left_recent_topics {
     margin-right: 30px;
 }
 
+.sidebar-topic-check {
+    display: flex;
+    align-items: center;
+    min-width: $topic_resolve_width;
+    font-size: 15px;
+    height: 20px;
+}
+
 .conversation-partners,
 .topic-name {
     display: block;
@@ -419,11 +443,12 @@ ul.topic-list {
 
 ul.expanded_private_messages {
     list-style-type: none;
-    font-size: 13px;
+    span.fa-group {
+        font-size: 90%;
+    }
     font-weight: 400;
     margin-left: 0;
     padding-bottom: 2px;
-    margin-top: 3px;
 }
 
 li.topic-list-item {
@@ -502,10 +527,22 @@ li.expanded_private_message {
 }
 
 #streams_header {
-    margin-right: 0;
+    margin-right: 12px;
     padding-left: $far_left_gutter_size;
     cursor: pointer;
     margin-top: 3px;
+}
+
+.stream-list-filter {
+    width: 236px;
+}
+
+.topic-list-filter {
+    /* Input width = 100% - 30px right-margin - 6px right-padding */
+    /* To keep the right edge of input along with its borders inline with other
+       topic items we consider to subtract the space given for right margin of
+       other items, and right padding of input element.  */
+    width: calc(100% - 36px);
 }
 
 .zero_count {
@@ -524,11 +561,4 @@ li.expanded_private_message {
     .zoom-in-hide {
         display: none;
     }
-}
-
-li.top_left_all_messages a,
-li.top_left_private_messages a,
-li.top_left_mentions a,
-li.top_left_starred_messages a {
-    display: block;
 }

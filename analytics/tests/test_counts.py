@@ -33,8 +33,7 @@ from analytics.models import (
     installation_epoch,
 )
 from zerver.lib.actions import (
-    InvitationError,
-    do_activate_user,
+    do_activate_mirror_dummy_user,
     do_create_realm,
     do_create_user,
     do_deactivate_user,
@@ -48,6 +47,7 @@ from zerver.lib.actions import (
     update_user_activity_interval,
 )
 from zerver.lib.create_user import create_user
+from zerver.lib.exceptions import InvitationError
 from zerver.lib.test_classes import ZulipTestCase
 from zerver.lib.timestamp import TimezoneNotUTCException, floor_to_day
 from zerver.lib.topic import DB_TOPIC_NAME
@@ -220,7 +220,7 @@ class AnalyticsTestCase(ZulipTestCase):
                     else:
                         kwargs["realm"] = self.default_realm
             self.assertEqual(table.objects.filter(**kwargs).count(), 1)
-        self.assertEqual(table.objects.count(), len(arg_values))
+        self.assert_length(arg_values, table.objects.count())
 
 
 class TestProcessCountStat(AnalyticsTestCase):
@@ -1329,7 +1329,7 @@ class TestLoggingCountStats(AnalyticsTestCase):
                 "value__sum"
             ],
         )
-        do_activate_user(user, acting_user=None)
+        do_activate_mirror_dummy_user(user, acting_user=None)
         self.assertEqual(
             1,
             RealmCount.objects.filter(property=property, subgroup=False).aggregate(Sum("value"))[
@@ -1663,7 +1663,7 @@ class TestActiveUsersAudit(AnalyticsTestCase):
             "email4", "password", self.default_realm, "full_name", acting_user=None
         )
         do_deactivate_user(user2, acting_user=None)
-        do_activate_user(user3, acting_user=None)
+        do_activate_mirror_dummy_user(user3, acting_user=None)
         do_reactivate_user(user4, acting_user=None)
         end_time = floor_to_day(timezone_now()) + self.DAY
         do_fill_count_stat_at_hour(self.stat, end_time)

@@ -12,7 +12,7 @@
                 <div class="search-container">
                     <div id="add_new_subscription">
                         {{#if can_create_streams}}
-                        <button class="create_stream_button" title="{{t 'Create new stream' }} (n)">+</button>
+                        <button class="create_stream_button create_stream_plus_button tippy-zulip-tooltip" data-tippy-content="{{t 'Create new stream' }} (n)" data-tippy-placement="bottom">+</button>
                         {{/if}}
                         <div class="float-clear"></div>
                     </div>
@@ -29,12 +29,11 @@
             </div>
             <div class="right">
                 <div class="display-type">
-                    <div id="add_new_stream_title" class="stream-info-title">{{t 'Create stream' }}</div>
                     <div id="stream_settings_title" class="stream-info-title">{{t 'Stream settings' }}</div>
                 </div>
                 <div class="nothing-selected">
                     {{#if can_create_streams}}
-                    <button type="button" class="create_stream_button button small rounded sea-green">{{t 'Create stream' }}</button>
+                    <button type="button" class="create_stream_button animated-purple-button">{{t 'Create stream' }}</button>
                     <span>
                         {{#tr}}
                             First time? Read our <z-link>guidelines</z-link> for creating and naming streams.
@@ -43,7 +42,7 @@
                     </span>
                     {{/if}}
                 </div>
-                <div class="settings" data-simplebar data-simplebar-auto-hide="false">
+                <div id="stream_settings" class="settings" data-simplebar data-simplebar-auto-hide="false">
                     {{!-- edit stream here --}}
                 </div>
                 {{> stream_creation_form }}

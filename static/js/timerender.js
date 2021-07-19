@@ -11,6 +11,8 @@ import {
 import $ from "jquery";
 import _ from "lodash";
 
+import render_markdown_time_tooltip from "../templates/markdown_time_tooltip.hbs";
+
 import {$t} from "./i18n";
 import {page_params} from "./page_params";
 
@@ -18,6 +20,30 @@ let next_timerender_id = 0;
 
 export function clear_for_testing() {
     next_timerender_id = 0;
+}
+
+// Exported for tests only.
+export function get_tz_with_UTC_offset(time) {
+    const tz_offset = format(time, "xxx");
+    let timezone = new Intl.DateTimeFormat(undefined, {timeZoneName: "short"})
+        .formatToParts(time)
+        .find(({type}) => type === "timeZoneName").value;
+
+    if (timezone === "UTC") {
+        return "UTC";
+    }
+
+    // When user's locale doesn't match their timezone (eg. en_US for IST),
+    // we get `timezone` in the format of'GMT+x:y. We don't want to
+    // show that along with (UTC+x:y)
+    timezone = /GMT[+-][\d:]*/.test(timezone) ? "" : timezone;
+
+    const tz_UTC_offset = `(UTC${tz_offset})`;
+
+    if (timezone) {
+        return timezone + " " + tz_UTC_offset;
+    }
+    return tz_UTC_offset;
 }
 
 // Given a Date object 'time', returns an object:
@@ -31,7 +57,7 @@ export function clear_for_testing() {
 export function render_now(time, today = new Date()) {
     let time_str = "";
     let needs_update = false;
-    // render formal time to be used as title attr tooltip
+    // render formal time to be used for tippy tooltip
     // "\xa0" is U+00A0 NO-BREAK SPACE.
     // Can't use &nbsp; as that represents the literal string "&nbsp;".
     const formal_time_str = format(time, "EEEE,\u00A0MMMM\u00A0d,\u00A0yyyy");
@@ -81,7 +107,7 @@ export function last_seen_status_from_date(last_active_date, current_date = new 
     const days_old = differenceInCalendarDays(current_date, last_active_date);
     const hours = Math.floor(minutes / 60);
 
-    if (days_old === 0) {
+    if (hours < 24) {
         if (hours === 1) {
             return $t({defaultMessage: "An hour ago"});
         }
@@ -146,7 +172,7 @@ function render_date_span(elem, rendered_time, rendered_time_above) {
         return elem;
     }
     elem.append(_.escape(rendered_time.time_str));
-    return elem.attr("title", rendered_time.formal_time_str);
+    return elem.attr("data-tippy-content", rendered_time.formal_time_str);
 }
 
 // Given an Date object 'time', return a DOM node that initially
@@ -179,13 +205,16 @@ export function render_date(time, time_above, today) {
 }
 
 // Renders the timestamp returned by the <time:> Markdown syntax.
-export function render_markdown_timestamp(time, text) {
+export function render_markdown_timestamp(time) {
     const hourformat = page_params.twenty_four_hour_time ? "HH:mm" : "h:mm a";
     const timestring = format(time, "E, MMM d yyyy, " + hourformat);
-    const titlestring = "This time is in your timezone. Original text was '" + text + "'.";
+
+    const tz_offset_str = get_tz_with_UTC_offset(time);
+    const tooltip_html_content = render_markdown_time_tooltip({tz_offset_str});
+
     return {
         text: timestring,
-        title: titlestring,
+        tooltip_content: tooltip_html_content,
     };
 }
 
@@ -307,29 +336,18 @@ export const absolute_time = (function () {
 })();
 
 export function get_full_datetime(time) {
-    // Convert to number of hours ahead/behind UTC.
-    // The sign of getTimezoneOffset() is reversed wrt
-    // the conventional meaning of UTC+n / UTC-n
-    const tz_offset = -time.getTimezoneOffset() / 60;
-    return {
-        date: time.toLocaleDateString(),
-        time: time.toLocaleTimeString() + " (UTC" + (tz_offset < 0 ? "" : "+") + tz_offset + ")",
-    };
-}
+    const time_options = {timeStyle: "medium"};
 
-// Date.toLocaleDateString and Date.toLocaleTimeString are
-// expensive, so we delay running the following code until we need
-// the full date and time strings.
-export const set_full_datetime = function timerender_set_full_datetime(message, time_elem) {
-    if (message.full_date_str !== undefined) {
-        return;
+    if (page_params.twenty_four_hour_time) {
+        time_options.hourCycle = "h24";
     }
 
-    const time = new Date(message.timestamp * 1000);
-    const full_datetime = get_full_datetime(time);
+    const date_string = time.toLocaleDateString();
+    let time_string = time.toLocaleTimeString(undefined, time_options);
 
-    message.full_date_str = full_datetime.date;
-    message.full_time_str = full_datetime.time;
+    const tz_offset_str = get_tz_with_UTC_offset(time);
 
-    time_elem.attr("title", message.full_date_str + " " + message.full_time_str);
-};
+    time_string = time_string + " " + tz_offset_str;
+
+    return $t({defaultMessage: "{date} at {time}"}, {date: date_string, time: time_string});
+}

@@ -116,6 +116,7 @@ There are dozens of useful management commands under
   users.
 * `./manage.py send_password_reset_email`: Sends password reset email(s)
   to one or more users.
+* `./manage.py change_realm_subdomain`: Change subdomain of a realm.
 * `./manage.py change_user_email`: Change a user's email address.
 * `./manage.py change_user_role`: Can change are user's role
   (easier done [via the
@@ -125,6 +126,12 @@ There are dozens of useful management commands under
   export tools](../production/export-and-import.md) containing just
   the messages accessible by a single user.
 * `./manage.py reactivate_realm`: Reactivates a realm.
+* `./manage.py deactivate_user`: Deactivates a user. This can be done
+  more easily in Zulip's organization administrator UI.
+* `./manage.py delete_user`: Completely delete a user from the database.
+  For most purposes, deactivating users is preferred, since that does not
+  alter message history for other users.
+  See the `./manage.py delete_user --help` documentation for details.
 
 All of our management commands have internal documentation available
 via `manage.py command_name --help`.

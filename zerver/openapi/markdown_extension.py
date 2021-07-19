@@ -10,7 +10,7 @@ import json
 import re
 import shlex
 from textwrap import dedent
-from typing import Any, Dict, List, Mapping, Optional, Pattern, Tuple
+from typing import Any, Dict, List, Mapping, Match, Optional, Pattern, Tuple
 
 import markdown
 from django.conf import settings
@@ -18,7 +18,17 @@ from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
 
 import zerver.openapi.python_examples
-from zerver.openapi.openapi import get_openapi_description, get_openapi_fixture, openapi_spec
+from zerver.openapi.openapi import (
+    check_additional_imports,
+    check_requires_administrator,
+    generate_openapi_fixture,
+    get_curl_include_exclude,
+    get_openapi_description,
+    get_openapi_summary,
+    get_parameters_description,
+    get_responses_description,
+    openapi_spec,
+)
 
 MACRO_REGEXP = re.compile(
     r"\{generate_code_example(\(\s*(.+?)\s*\))*\|\s*(.+?)\s*\|\s*(.+?)\s*(\(\s*(.+)\s*\))?\}"
@@ -26,6 +36,9 @@ MACRO_REGEXP = re.compile(
 PYTHON_EXAMPLE_REGEX = re.compile(r"\# \{code_example\|\s*(.+?)\s*\}")
 JS_EXAMPLE_REGEX = re.compile(r"\/\/ \{code_example\|\s*(.+?)\s*\}")
 MACRO_REGEXP_DESC = re.compile(r"\{generate_api_description(\(\s*(.+?)\s*\))}")
+MACRO_REGEXP_TITLE = re.compile(r"\{generate_api_title(\(\s*(.+?)\s*\))}")
+MACRO_REGEXP_RESPONSE_DESC = re.compile(r"\{generate_response_description(\(\s*(.+?)\s*\))}")
+MACRO_REGEXP_PARAMETER_DESC = re.compile(r"\{generate_parameter_description(\(\s*(.+?)\s*\))}")
 
 PYTHON_CLIENT_CONFIG = """
 #!/usr/bin/env python3
@@ -70,6 +83,7 @@ DEFAULT_EXAMPLE = {
     "string": "demo",
     "boolean": False,
 }
+ADMIN_CONFIG_LANGUAGES = ["python", "javascript"]
 
 
 def parse_language_and_options(input_str: Optional[str]) -> Tuple[str, Dict[str, Any]]:
@@ -116,17 +130,28 @@ def extract_code_example(
 def render_python_code_example(
     function: str, admin_config: bool = False, **kwargs: Any
 ) -> List[str]:
+    if function not in zerver.openapi.python_examples.TEST_FUNCTIONS:
+        return []
     method = zerver.openapi.python_examples.TEST_FUNCTIONS[function]
     function_source_lines = inspect.getsourcelines(method)[0]
 
     if admin_config:
-        config = PYTHON_CLIENT_ADMIN_CONFIG.splitlines()
+        config_string = PYTHON_CLIENT_ADMIN_CONFIG
     else:
-        config = PYTHON_CLIENT_CONFIG.splitlines()
+        config_string = PYTHON_CLIENT_CONFIG
+
+    endpoint, endpoint_method = function.split(":")
+    extra_imports = check_additional_imports(endpoint, endpoint_method)
+    if extra_imports:
+        extra_imports = sorted(extra_imports + ["zulip"])
+        extra_imports = [f"import {each_import}" for each_import in extra_imports]
+        config_string = config_string.replace("import zulip", "\n".join(extra_imports))
+
+    config = config_string.splitlines()
 
     snippets = extract_code_example(function_source_lines, [], PYTHON_EXAMPLE_REGEX)
 
-    code_example = []
+    code_example = ["{tab|python}\n"]
     code_example.append("```python")
     code_example.extend(config)
 
@@ -148,7 +173,8 @@ def render_javascript_code_example(
     pattern = fr'^add_example\(\s*"[^"]*",\s*{re.escape(json.dumps(function))},\s*\d+,\s*async \(client, console\) => \{{\n(.*?)^(?:\}}| *\}},\n)\);$'
     with open("zerver/openapi/javascript_examples.js") as f:
         m = re.search(pattern, f.read(), re.M | re.S)
-    assert m is not None
+    if m is None:
+        return []
     function_source_lines = dedent(m.group(1)).splitlines()
 
     snippets = extract_code_example(function_source_lines, [], JS_EXAMPLE_REGEX)
@@ -158,7 +184,11 @@ def render_javascript_code_example(
     else:
         config = JS_CLIENT_CONFIG.splitlines()
 
-    code_example = []
+    code_example = [
+        "{tab|js}\n",
+        "More examples and documentation can be found [here](https://github.com/zulip/zulip-js).",
+    ]
+
     code_example.append("```js")
     code_example.extend(config)
     code_example.append("(async () => {")
@@ -245,8 +275,6 @@ def generate_curl_example(
     exclude: Optional[List[str]] = None,
     include: Optional[List[str]] = None,
 ) -> List[str]:
-    if exclude is not None and include is not None:
-        raise AssertionError("exclude and include cannot be set at the same time.")
 
     lines = ["```curl"]
     operation = endpoint + ":" + method.lower()
@@ -334,10 +362,8 @@ def generate_curl_example(
 def render_curl_example(
     function: str,
     api_url: str,
-    exclude: Optional[List[str]] = None,
-    include: Optional[List[str]] = None,
 ) -> List[str]:
-    """ A simple wrapper around generate_curl_example. """
+    """A simple wrapper around generate_curl_example."""
     parts = function.split(":")
     endpoint = parts[0]
     method = parts[1]
@@ -347,9 +373,18 @@ def render_curl_example(
     if len(parts) > 3:
         kwargs["auth_api_key"] = parts[3]
     kwargs["api_url"] = api_url
-    kwargs["exclude"] = exclude
-    kwargs["include"] = include
-    return generate_curl_example(endpoint, method, **kwargs)
+    rendered_example = []
+    for element in get_curl_include_exclude(endpoint, method):
+        kwargs["include"] = None
+        kwargs["exclude"] = None
+        if element["type"] == "include":
+            kwargs["include"] = element["parameters"]["enum"]
+        if element["type"] == "exclude":
+            kwargs["exclude"] = element["parameters"]["enum"]
+        if "description" in element:
+            rendered_example.extend(element["description"].splitlines())
+        rendered_example = rendered_example + generate_curl_example(endpoint, method, **kwargs)
+    return rendered_example
 
 
 SUPPORTED_LANGUAGES: Dict[str, Any] = {
@@ -385,45 +420,44 @@ class APIMarkdownExtension(Extension):
         md.preprocessors.register(
             APIDescriptionPreprocessor(md, self.getConfigs()), "generate_api_description", 530
         )
+        md.preprocessors.register(
+            APITitlePreprocessor(md, self.getConfigs()), "generate_api_title", 531
+        )
+        md.preprocessors.register(
+            ResponseDescriptionPreprocessor(md, self.getConfigs()),
+            "generate_response_description",
+            531,
+        )
+        md.preprocessors.register(
+            ParameterDescriptionPreprocessor(md, self.getConfigs()),
+            "generate_parameter_description",
+            535,
+        )
 
 
-class APICodeExamplesPreprocessor(Preprocessor):
-    def __init__(self, md: markdown.Markdown, config: Mapping[str, Any]) -> None:
+class BasePreprocessor(Preprocessor):
+    def __init__(
+        self, REGEXP: Pattern[str], md: markdown.Markdown, config: Mapping[str, Any]
+    ) -> None:
         super().__init__(md)
         self.api_url = config["api_url"]
+        self.REGEXP = REGEXP
 
     def run(self, lines: List[str]) -> List[str]:
         done = False
         while not done:
             for line in lines:
                 loc = lines.index(line)
-                match = MACRO_REGEXP.search(line)
+                match = self.REGEXP.search(line)
 
                 if match:
-                    language, options = parse_language_and_options(match.group(2))
-                    function = match.group(3)
-                    key = match.group(4)
-                    argument = match.group(6)
-                    if self.api_url is None:
-                        raise AssertionError("Cannot render curl API examples without API URL set.")
-                    options["api_url"] = self.api_url
-
-                    if key == "fixture":
-                        if argument:
-                            text = self.render_fixture(function, name=argument)
-                    elif key == "example":
-                        if argument == "admin_config=True":
-                            text = SUPPORTED_LANGUAGES[language]["render"](
-                                function, admin_config=True
-                            )
-                        else:
-                            text = SUPPORTED_LANGUAGES[language]["render"](function, **options)
+                    text = self.generate_text(match)
 
                     # The line that contains the directive to include the macro
                     # may be preceded or followed by text or tags, in that case
                     # we need to make sure that any preceding or following text
                     # stays the same.
-                    line_split = MACRO_REGEXP.split(line, maxsplit=0)
+                    line_split = self.REGEXP.split(line, maxsplit=0)
                     preceding = line_split[0]
                     following = line_split[-1]
                     text = [preceding, *text, following]
@@ -433,55 +467,91 @@ class APICodeExamplesPreprocessor(Preprocessor):
                 done = True
         return lines
 
-    def render_fixture(self, function: str, name: Optional[str] = None) -> List[str]:
-        fixture = []
+    def generate_text(self, match: Match[str]) -> List[str]:
+        function = match.group(2)
+        text = self.render(function)
+        return text
 
+    def render(self, function: str) -> List[str]:
+        raise NotImplementedError("Must be overriden by a child class")
+
+
+class APICodeExamplesPreprocessor(BasePreprocessor):
+    def __init__(self, md: markdown.Markdown, config: Mapping[str, Any]) -> None:
+        super().__init__(MACRO_REGEXP, md, config)
+
+    def generate_text(self, match: Match[str]) -> List[str]:
+        language, options = parse_language_and_options(match.group(2))
+        function = match.group(3)
+        key = match.group(4)
+        if self.api_url is None:
+            raise AssertionError("Cannot render curl API examples without API URL set.")
+        options["api_url"] = self.api_url
+
+        if key == "fixture":
+            text = self.render(function)
+        elif key == "example":
+            path, method = function.rsplit(":", 1)
+            if language in ADMIN_CONFIG_LANGUAGES and check_requires_administrator(path, method):
+                text = SUPPORTED_LANGUAGES[language]["render"](function, admin_config=True)
+            else:
+                text = SUPPORTED_LANGUAGES[language]["render"](function, **options)
+        return text
+
+    def render(self, function: str) -> List[str]:
         path, method = function.rsplit(":", 1)
-        fixture_dict = get_openapi_fixture(path, method, name)
-        fixture_json = json.dumps(fixture_dict, indent=4, sort_keys=True, separators=(",", ": "))
-
-        fixture.append("``` json")
-        fixture.extend(fixture_json.splitlines())
-        fixture.append("```")
-
-        return fixture
+        return generate_openapi_fixture(path, method)
 
 
-class APIDescriptionPreprocessor(Preprocessor):
+class APIDescriptionPreprocessor(BasePreprocessor):
     def __init__(self, md: markdown.Markdown, config: Mapping[str, Any]) -> None:
-        super().__init__(md)
-        self.api_url = config["api_url"]
+        super().__init__(MACRO_REGEXP_DESC, md, config)
 
-    def run(self, lines: List[str]) -> List[str]:
-        done = False
-        while not done:
-            for line in lines:
-                loc = lines.index(line)
-                match = MACRO_REGEXP_DESC.search(line)
-
-                if match:
-                    function = match.group(2)
-                    text = self.render_description(function)
-                    # The line that contains the directive to include the macro
-                    # may be preceded or followed by text or tags, in that case
-                    # we need to make sure that any preceding or following text
-                    # stays the same.
-                    line_split = MACRO_REGEXP_DESC.split(line, maxsplit=0)
-                    preceding = line_split[0]
-                    following = line_split[-1]
-                    text = [preceding, *text, following]
-                    lines = lines[:loc] + text + lines[loc + 1 :]
-                    break
-            else:
-                done = True
-        return lines
-
-    def render_description(self, function: str) -> List[str]:
+    def render(self, function: str) -> List[str]:
         description: List[str] = []
         path, method = function.rsplit(":", 1)
         description_dict = get_openapi_description(path, method)
         description_dict = description_dict.replace("{{api_url}}", self.api_url)
         description.extend(description_dict.splitlines())
+        return description
+
+
+class APITitlePreprocessor(BasePreprocessor):
+    def __init__(self, md: markdown.Markdown, config: Mapping[str, Any]) -> None:
+        super().__init__(MACRO_REGEXP_TITLE, md, config)
+
+    def render(self, function: str) -> List[str]:
+        title: List[str] = []
+        path, method = function.rsplit(":", 1)
+        raw_title = get_openapi_summary(path, method)
+        title.extend(raw_title.splitlines())
+        title = ["# " + line for line in title]
+        if check_requires_administrator(path, method):
+            title.append("{!api-admin-only.md!}")
+        return title
+
+
+class ResponseDescriptionPreprocessor(BasePreprocessor):
+    def __init__(self, md: markdown.Markdown, config: Mapping[str, Any]) -> None:
+        super().__init__(MACRO_REGEXP_RESPONSE_DESC, md, config)
+
+    def render(self, function: str) -> List[str]:
+        description: List[str] = []
+        path, method = function.rsplit(":", 1)
+        raw_description = get_responses_description(path, method)
+        description.extend(raw_description.splitlines())
+        return description
+
+
+class ParameterDescriptionPreprocessor(BasePreprocessor):
+    def __init__(self, md: markdown.Markdown, config: Mapping[str, Any]) -> None:
+        super().__init__(MACRO_REGEXP_PARAMETER_DESC, md, config)
+
+    def render(self, function: str) -> List[str]:
+        description: List[str] = []
+        path, method = function.rsplit(":", 1)
+        raw_description = get_parameters_description(path, method)
+        description.extend(raw_description.splitlines())
         return description
 
 

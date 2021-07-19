@@ -6,6 +6,7 @@ import * as compose from "./compose";
 import * as compose_actions from "./compose_actions";
 import * as compose_state from "./compose_state";
 import {csrf_token} from "./csrf";
+import * as hash_util from "./hash_util";
 import * as hashchange from "./hashchange";
 import {localstorage} from "./localstorage";
 import * as message_list from "./message_list";
@@ -78,11 +79,7 @@ function preserve_state(send_after_reload, save_pointer, save_narrow, save_compo
         }
     }
 
-    let oldhash = window.location.hash;
-    if (oldhash.length !== 0 && oldhash[0] === "#") {
-        oldhash = oldhash.slice(1);
-    }
-    url += "+oldhash=" + encodeURIComponent(oldhash);
+    url += hash_util.build_reload_url();
 
     const ls = localstorage();
     // Delete all the previous preserved states.
@@ -246,7 +243,7 @@ export function initiate({
     reload_state.set_state_to_pending();
 
     // We're now planning to execute a reload of the browser, usually
-    // to get an updated version of the Zulip webapp code.  Because in
+    // to get an updated version of the Zulip web app code.  Because in
     // most cases all browsers will be receiving this notice at the
     // same or similar times, we need to randomize the time that we do
     // this in order to avoid a thundering herd overloading the server.

@@ -15,24 +15,9 @@ export function random_int(min, max) {
 // for some i and false otherwise.
 //
 // Usage: lower_bound(array, value, [less])
-//        lower_bound(array, first, last, value, [less])
-export function lower_bound(array, arg1, arg2, arg3, arg4) {
-    let first;
-    let last;
-    let value;
-    let less;
-    if (arg3 === undefined) {
-        first = 0;
-        last = array.length;
-        value = arg1;
-        less = arg2;
-    } else {
-        first = arg1;
-        last = arg2;
-        value = arg3;
-        less = arg4;
-    }
-
+export function lower_bound(array, value, less) {
+    let first = 0;
+    const last = array.length;
     if (less === undefined) {
         less = function (a, b) {
             return a < b;
@@ -284,12 +269,12 @@ export function clean_user_content_links(html) {
     for (const elt of content.querySelectorAll("a")) {
         // Ensure that all external links have target="_blank"
         // rel="opener noreferrer".  This ensures that external links
-        // never replace the Zulip webapp while also protecting
+        // never replace the Zulip web app while also protecting
         // against reverse tabnapping attacks, without relying on the
         // correctness of how Zulip's Markdown processor generates links.
         //
         // Fragment links, which we intend to only open within the
-        // Zulip webapp using our hashchange system, do not require
+        // Zulip web app using our hashchange system, do not require
         // these attributes.
         const href = elt.getAttribute("href");
         let url;
@@ -333,4 +318,31 @@ export function clean_user_content_links(html) {
         );
     }
     return content.innerHTML;
+}
+
+export function filter_by_word_prefix_match(items, search_term, item_to_text) {
+    if (search_term === "") {
+        return items;
+    }
+
+    let search_terms = search_term.toLowerCase().split(",");
+    search_terms = search_terms.map((s) => s.trim());
+
+    const filtered_items = items.filter((item) =>
+        search_terms.some((search_term) => {
+            const lower_name = item_to_text(item).toLowerCase();
+            const cands = lower_name.split(" ");
+            cands.push(lower_name);
+            return cands.some((name) => name.startsWith(search_term));
+        }),
+    );
+
+    return filtered_items;
+}
+
+export function get_time_from_date_muted(date_muted) {
+    if (date_muted === undefined) {
+        return Date.now();
+    }
+    return date_muted * 1000;
 }

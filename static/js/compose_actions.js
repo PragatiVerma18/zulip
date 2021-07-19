@@ -6,10 +6,12 @@ import * as fenced_code from "../shared/js/fenced_code";
 import * as channel from "./channel";
 import * as common from "./common";
 import * as compose from "./compose";
+import * as compose_actions from "./compose_actions";
 import * as compose_fade from "./compose_fade";
 import * as compose_pm_pill from "./compose_pm_pill";
 import * as compose_state from "./compose_state";
 import * as compose_ui from "./compose_ui";
+import * as compose_validate from "./compose_validate";
 import * as drafts from "./drafts";
 import * as hash_util from "./hash_util";
 import {$t} from "./i18n";
@@ -19,10 +21,12 @@ import * as narrow_state from "./narrow_state";
 import * as notifications from "./notifications";
 import {page_params} from "./page_params";
 import * as people from "./people";
+import * as recent_topics_ui from "./recent_topics_ui";
+import * as recent_topics_util from "./recent_topics_util";
 import * as reload_state from "./reload_state";
+import * as resize from "./resize";
 import * as stream_bar from "./stream_bar";
 import * as stream_data from "./stream_data";
-import * as ui_util from "./ui_util";
 import * as unread_ops from "./unread_ops";
 
 export function blur_compose_inputs() {
@@ -30,6 +34,8 @@ export function blur_compose_inputs() {
 }
 
 function hide_box() {
+    // This is the main hook for saving drafts when closing the compose box.
+    drafts.update_draft();
     blur_compose_inputs();
     $("#stream-message").hide();
     $("#private-message").hide();
@@ -100,24 +106,27 @@ function clear_box() {
     compose.clear_invites();
 
     // TODO: Better encapsulate at-mention warnings.
-    compose.clear_all_everyone_warnings();
-    compose.clear_announce_warnings();
+    compose_validate.clear_all_everyone_warnings();
+    compose_validate.clear_announce_warnings();
     compose.clear_private_stream_alert();
-    compose.reset_user_acknowledged_all_everyone_flag();
-    compose.reset_user_acknowledged_announce_flag();
+    compose_validate.set_user_acknowledged_all_everyone_flag(undefined);
+    compose_validate.set_user_acknowledged_announce_flag(undefined);
 
     clear_textarea();
+    compose_validate.check_overflow_text();
     $("#compose-textarea").removeData("draft-id");
     compose_ui.autosize_textarea($("#compose-textarea"));
     $("#compose-send-status").hide(0);
 }
 
 export function autosize_message_content() {
-    autosize($("#compose-textarea"), {
-        callback() {
-            maybe_scroll_up_selected_message();
-        },
-    });
+    if (!compose_ui.is_full_size()) {
+        autosize($("#compose-textarea"), {
+            callback() {
+                maybe_scroll_up_selected_message();
+            },
+        });
+    }
 }
 
 export function expand_compose_box() {
@@ -132,7 +141,6 @@ export function complete_starting_tasks(msg_type, opts) {
     // makes testing a bit easier.
 
     maybe_scroll_up_selected_message();
-    ui_util.change_tab_to("#message_feed_container");
     compose_fade.start_compose(msg_type);
     stream_bar.decorate(opts.stream, $("#stream-message .message_header_stream"), true);
     $(document).trigger(new $.Event("compose_started.zulip", opts));
@@ -215,10 +223,15 @@ export function start(msg_type, opts) {
     expand_compose_box();
 
     opts = fill_in_opts_from_current_narrowed_view(msg_type, opts);
+
     // If we are invoked by a compose hotkey (c or x) or new topic
     // button, do not assume that we know what the message's topic or
     // PM recipient should be.
-    if (opts.trigger === "compose_hotkey" || opts.trigger === "new topic button") {
+    if (
+        opts.trigger === "compose_hotkey" ||
+        opts.trigger === "new topic button" ||
+        opts.trigger === "new private message"
+    ) {
         opts.topic = "";
         opts.private_message_recipient = "";
     }
@@ -261,10 +274,18 @@ export function start(msg_type, opts) {
     // Show either stream/topic fields or "You and" field.
     show_box(msg_type, opts);
 
+    // Reset the `max-height` property of `compose-textarea` so that the
+    // compose-box do not cover the last messages of the current stream
+    // while writing a long message.
+    resize.reset_compose_textarea_max_height();
+
     complete_starting_tasks(msg_type, opts);
 }
 
 export function cancel() {
+    // As user closes the compose box, restore the compose box max height
+    compose_ui.make_compose_box_original_size();
+
     $("#compose-textarea").height(40 + "px");
 
     if (page_params.narrow !== undefined) {
@@ -290,47 +311,58 @@ export function cancel() {
 }
 
 export function respond_to_message(opts) {
-    let msg_type;
     // Before initiating a reply to a message, if there's an
     // in-progress composition, snapshot it.
     drafts.update_draft();
 
-    const message = message_lists.current.selected_message();
-
-    if (message === undefined) {
-        // empty narrow implementation
-        if (
-            !narrow_state.narrowed_by_pm_reply() &&
-            !narrow_state.narrowed_by_stream_reply() &&
-            !narrow_state.narrowed_by_topic_reply()
-        ) {
-            compose.nonexistent_stream_reply_error();
+    let message;
+    let msg_type;
+    if (recent_topics_util.is_visible()) {
+        message = recent_topics_ui.get_focused_row_message();
+        if (message === undefined) {
+            // Open empty compose with nothing pre-filled since
+            // user is not focused on any table row.
+            compose_actions.start("stream", {trigger: "recent_topics_nofocus"});
             return;
         }
-        const current_filter = narrow_state.filter();
-        const first_term = current_filter.operators()[0];
-        const first_operator = first_term.operator;
-        const first_operand = first_term.operand;
+    } else {
+        message = message_lists.current.selected_message();
 
-        if (first_operator === "stream" && !stream_data.is_subscribed(first_operand)) {
-            compose.nonexistent_stream_reply_error();
+        if (message === undefined) {
+            // empty narrow implementation
+            if (
+                !narrow_state.narrowed_by_pm_reply() &&
+                !narrow_state.narrowed_by_stream_reply() &&
+                !narrow_state.narrowed_by_topic_reply()
+            ) {
+                start("stream", {trigger: "empty_narrow_compose"});
+                return;
+            }
+            const current_filter = narrow_state.filter();
+            const first_term = current_filter.operators()[0];
+            const first_operator = first_term.operator;
+            const first_operand = first_term.operand;
+
+            if (first_operator === "stream" && !stream_data.is_subscribed(first_operand)) {
+                start("stream", {trigger: "empty_narrow_compose"});
+                return;
+            }
+
+            // Set msg_type to stream by default in the case of an empty
+            // home view.
+            msg_type = "stream";
+            if (narrow_state.narrowed_by_pm_reply()) {
+                msg_type = "private";
+            }
+
+            const new_opts = fill_in_opts_from_current_narrowed_view(msg_type, opts);
+            start(new_opts.message_type, new_opts);
             return;
         }
 
-        // Set msg_type to stream by default in the case of an empty
-        // home view.
-        msg_type = "stream";
-        if (narrow_state.narrowed_by_pm_reply()) {
-            msg_type = "private";
+        if (message_lists.current.can_mark_messages_read()) {
+            unread_ops.notify_server_message_read(message);
         }
-
-        const new_opts = fill_in_opts_from_current_narrowed_view(msg_type, opts);
-        start(new_opts.message_type, new_opts);
-        return;
-    }
-
-    if (message_lists.current.can_mark_messages_read()) {
-        unread_ops.notify_server_message_read(message);
     }
 
     // Important note: A reply_type of 'personal' is for the R hotkey
@@ -432,20 +464,18 @@ export function quote_and_reply(opts) {
         // are prone to glitches where you select the
         // text, plus it's a complicated codepath that
         // can have other unintended consequences.)
-        //
-        // Note also that we always put the quoted text
-        // above the current text, which explains us
-        // moving the caret below.  I think this is what
-        // most users will want, and it's consistent with
-        // the behavior we had on FF before this change
-        // (which may have been an accident of
-        // implementation).  If we change this decision,
-        // we'll need to make `insert_syntax_and_focus`
-        // smarter about newlines.
-        textarea.caret(0);
+
+        if (textarea.caret() !== 0) {
+            // Insert a newline before quoted message if there is
+            // already some content in the compose box and quoted
+            // message is not being inserted at the beginning.
+            textarea.caret("\n");
+        }
     } else {
         respond_to_message(opts);
     }
+
+    const prev_caret = textarea.caret();
 
     compose_ui.insert_syntax_and_focus("[Quoting…]\n", textarea);
 
@@ -467,6 +497,8 @@ export function quote_and_reply(opts) {
         content += `${fence}quote\n${message.raw_content}\n${fence}`;
         compose_ui.replace_syntax("[Quoting…]", content, textarea);
         compose_ui.autosize_textarea($("#compose-textarea"));
+        // Update textarea caret to point to the new line after quoted message.
+        textarea.caret(prev_caret + content.length + 1);
     }
 
     if (message && message.raw_content) {

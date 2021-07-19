@@ -13,14 +13,10 @@ from django.utils.cache import patch_vary_headers
 from tornado.wsgi import WSGIContainer
 
 from zerver.lib.response import json_response
-from zerver.middleware import async_request_timer_restart, async_request_timer_stop
 from zerver.tornado.descriptors import get_descriptor_by_handler_id
 
 current_handler_id = 0
 handlers: Dict[int, "AsyncDjangoHandler"] = {}
-
-# Copied from django.core.handlers.base
-logger = logging.getLogger("django.request")
 
 
 def get_handler_by_id(handler_id: int) -> "AsyncDjangoHandler":
@@ -48,16 +44,23 @@ def finish_handler(
 ) -> None:
     err_msg = f"Got error finishing handler for queue {event_queue_id}"
     try:
+        # We do the import during runtime to avoid cyclic dependency
+        # with zerver.lib.request
+        from zerver.lib.request import get_request_notes
+        from zerver.middleware import async_request_timer_restart
+
         # We call async_request_timer_restart here in case we are
         # being finished without any events (because another
         # get_events request has supplanted this request)
         handler = get_handler_by_id(handler_id)
         request = handler._request
         async_request_timer_restart(request)
+        log_data = get_request_notes(request).log_data
+        assert log_data is not None
         if len(contents) != 1:
-            request._log_data["extra"] = f"[{event_queue_id}/1]"
+            log_data["extra"] = f"[{event_queue_id}/1]"
         else:
-            request._log_data["extra"] = "[{}/1/{}]".format(event_queue_id, contents[0]["type"])
+            log_data["extra"] = "[{}/1/{}]".format(event_queue_id, contents[0]["type"])
 
         handler.zulip_finish(
             dict(result="success", msg="", events=contents, queue_id=event_queue_id),
@@ -108,9 +111,12 @@ class AsyncDjangoHandler(tornado.web.RequestHandler, base.BaseHandler):
         signals.request_started.send(sender=self.__class__)
         request = WSGIRequest(environ)
 
+        # We do the import during runtime to avoid cyclic dependency
+        from zerver.lib.request import get_request_notes
+
         # Provide a way for application code to access this handler
         # given the HttpRequest object.
-        request._tornado_handler = self
+        get_request_notes(request).tornado_handler = self
 
         return request
 
@@ -146,6 +152,10 @@ class AsyncDjangoHandler(tornado.web.RequestHandler, base.BaseHandler):
             response = self.get_response(request)
 
             if hasattr(response, "asynchronous"):
+                # We import async_request_timer_restart during runtime
+                # to avoid cyclic dependency with zerver.lib.request
+                from zerver.middleware import async_request_timer_stop
+
                 # For asynchronous requests, this is where we exit
                 # without returning the HttpResponse that Django
                 # generated back to the user in order to long-poll the
@@ -218,21 +228,24 @@ class AsyncDjangoHandler(tornado.web.RequestHandler, base.BaseHandler):
         # HttpResponse with all Django middleware run.
         request = self.convert_tornado_request_to_django_request()
 
+        # We import get_request_notes during runtime to avoid
+        # cyclic import
+        from zerver.lib.request import get_request_notes
+
+        request_notes = get_request_notes(request)
+        old_request_notes = get_request_notes(old_request)
+
         # Add to this new HttpRequest logging data from the processing of
         # the original request; we will need these for logging.
-        #
-        # TODO: Design a cleaner way to manage these attributes,
-        # perhaps via creating a ZulipHttpRequest class that contains
-        # these attributes with a copy method.
-        request._log_data = old_request._log_data
+        request_notes.log_data = old_request_notes.log_data
+        if request_notes.requestor_for_logs is not None:
+            request_notes.requestor_for_logs = old_request_notes.requestor_for_logs
         if hasattr(request, "_rate_limit"):
             request._rate_limit = old_request._rate_limit
-        if hasattr(request, "_requestor_for_logs"):
-            request._requestor_for_logs = old_request._requestor_for_logs
         request.user = old_request.user
-        request.client = old_request.client
-        request.client_name = old_request.client_name
-        request.client_version = old_request.client_version
+        request_notes.client = old_request_notes.client
+        request_notes.client_name = old_request_notes.client_name
+        request_notes.client_version = old_request_notes.client_version
 
         # The saved_response attribute, if present, causes
         # rest_dispatch to return the response immediately before
@@ -240,7 +253,7 @@ class AsyncDjangoHandler(tornado.web.RequestHandler, base.BaseHandler):
         # request/middleware system to run unmodified while avoiding
         # running expensive things like Zulip's authentication code a
         # second time.
-        request.saved_response = json_response(
+        request_notes.saved_response = json_response(
             res_type=result_dict["result"], data=result_dict, status=self.get_status()
         )
 

@@ -383,8 +383,8 @@ export class MessageList {
         }
     }
 
-    update_topic_muting_and_rerender() {
-        this.data.update_items_for_topic_muting();
+    update_muting_and_rerender() {
+        this.data.update_items_for_muting();
         // We need to rerender whether or not the narrow hides muted
         // topics, because we need to update recipient bars for topics
         // we've muted when we are displaying those topics.
@@ -395,6 +395,9 @@ export class MessageList {
         // to do this is in the message_events.js code path for
         // processing topic edits, since that's the only place we'll
         // call this frequently anyway.
+        //
+        // But in any case, we need to rerender the list for user muting,
+        // to make sure only the right messages are hidden.
         this.rerender();
     }
 

@@ -5,6 +5,7 @@ import ldap
 from django_auth_ldap.config import LDAPSearch
 
 from zerver.lib.db import TimeTrackingConnection
+from zerver.lib.types import SAMLIdPConfigDict
 
 from .config import DEPLOY_ROOT, get_from_file_if_exists
 from .settings import (
@@ -63,7 +64,7 @@ if "BAN_CONSOLE_OUTPUT" in os.environ:
 
 # Decrease the get_updates timeout to 1 second.
 # This allows frontend tests to proceed quickly to the next test step.
-POLL_TIMEOUT = 1000
+EVENT_QUEUE_LONGPOLL_TIMEOUT_SECONDS = 1
 
 # Stores the messages in `django.core.mail.outbox` rather than sending them.
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
@@ -188,10 +189,22 @@ SOCIAL_AUTH_APPLE_KEY = "KEYISKEY"
 SOCIAL_AUTH_APPLE_TEAM = "TEAMSTRING"
 SOCIAL_AUTH_APPLE_SECRET = get_from_file_if_exists("zerver/tests/fixtures/apple/private_key.pem")
 
-APPLE_JWK = get_from_file_if_exists("zerver/tests/fixtures/apple/jwk")
+EXAMPLE_JWK = get_from_file_if_exists("zerver/tests/fixtures/example_jwk")
 APPLE_ID_TOKEN_GENERATION_KEY = get_from_file_if_exists(
     "zerver/tests/fixtures/apple/token_gen_private_key"
 )
+
+SOCIAL_AUTH_OIDC_ENABLED_IDPS = {
+    "testoidc": {
+        "display_name": "Test OIDC",
+        "oidc_url": "https://example.com/api/openid",
+        "display_icon": None,
+        "client_id": "key",
+        "secret": "secret",
+    }
+}
+SOCIAL_AUTH_OIDC_FULL_NAME_VALIDATED = True
+
 
 VIDEO_ZOOM_CLIENT_ID = "client_id"
 VIDEO_ZOOM_CLIENT_SECRET = "client_secret"
@@ -204,9 +217,7 @@ BIG_BLUE_BUTTON_URL = "https://bbb.example.com/bigbluebutton/"
 TWO_FACTOR_AUTHENTICATION_ENABLED = False
 PUSH_NOTIFICATION_BOUNCER_URL = None
 
-THUMBOR_URL = "http://127.0.0.1:9995"
 THUMBNAIL_IMAGES = True
-THUMBOR_SERVES_CAMO = True
 
 # Logging the emails while running the tests adds them
 # to /emails page.
@@ -234,7 +245,7 @@ SOCIAL_AUTH_SAML_SUPPORT_CONTACT = {
     "emailAddress": "support@example.com",
 }
 
-SOCIAL_AUTH_SAML_ENABLED_IDPS = {
+SOCIAL_AUTH_SAML_ENABLED_IDPS: Dict[str, SAMLIdPConfigDict] = {
     "test_idp": {
         "entity_id": "https://idp.testshib.org/idp/shibboleth",
         "url": "https://idp.testshib.org/idp/profile/SAML2/Redirect/SSO",
@@ -250,6 +261,8 @@ SOCIAL_AUTH_SAML_ENABLED_IDPS = {
 
 RATE_LIMITING_RULES: Dict[str, List[Tuple[int, int]]] = {
     "api_by_user": [],
+    "api_by_ip": [],
+    "api_by_remote_server": [],
     "authenticate_by_username": [],
     "password_reset_form_by_email": [],
 }

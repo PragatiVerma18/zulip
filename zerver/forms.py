@@ -14,15 +14,15 @@ from django.http import HttpRequest
 from django.urls import reverse
 from django.utils.http import urlsafe_base64_encode
 from django.utils.translation import gettext as _
-from jinja2 import Markup as mark_safe
+from jinja2.utils import Markup as mark_safe
 from two_factor.forms import AuthenticationTokenForm as TwoFactorAuthenticationTokenForm
 from two_factor.utils import totp_digits
 
 from zerver.lib.actions import do_change_password, email_not_system_bot
 from zerver.lib.email_validation import email_allowed_for_realm
+from zerver.lib.exceptions import JsonableError, RateLimited
 from zerver.lib.name_restrictions import is_disposable_domain, is_reserved_subdomain
-from zerver.lib.rate_limiter import RateLimited, RateLimitedObject
-from zerver.lib.request import JsonableError
+from zerver.lib.rate_limiter import RateLimitedObject
 from zerver.lib.send_email import FromAddress, send_email
 from zerver.lib.subdomains import get_subdomain, is_root_domain_available
 from zerver.lib.users import check_full_name
@@ -38,6 +38,10 @@ from zerver.models import (
 )
 from zproject.backends import check_password_strength, email_auth_enabled, email_belongs_to_ldap
 
+if settings.BILLING_ENABLED:
+    from corporate.lib.registration import check_spare_licenses_available_for_registering_new_user
+    from corporate.lib.stripe import LicenseLimitError
+
 MIT_VALIDATION_ERROR = (
     "That user does not exist at MIT or is a "
     + '<a href="https://ist.mit.edu/email-lists">mailing list</a>. '
@@ -52,6 +56,10 @@ WRONG_SUBDOMAIN_ERROR = (
 DEACTIVATED_ACCOUNT_ERROR = (
     "Your account is no longer active. "
     + "Please contact your organization administrator to reactivate it."
+)
+PASSWORD_RESET_NEEDED_ERROR = (
+    "Your password has been disabled because it is too weak. "
+    "Reset your password to create a new one."
 )
 PASSWORD_TOO_WEAK_ERROR = "The password is too weak."
 AUTHENTICATION_RATE_LIMITED_ERROR = (
@@ -106,6 +114,7 @@ class RegistrationForm(forms.Form):
     # actually required for a realm
     password = forms.CharField(widget=forms.PasswordInput, max_length=MAX_PASSWORD_LENGTH)
     realm_subdomain = forms.CharField(max_length=Realm.MAX_REALM_SUBDOMAIN_LENGTH, required=False)
+    realm_type = forms.IntegerField(required=False)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         # Since the superclass doesn't except random extra kwargs, we
@@ -203,6 +212,17 @@ class HomepageForm(forms.Form):
 
         if realm.is_zephyr_mirror_realm:
             email_is_not_mit_mailing_list(email)
+
+        if settings.BILLING_ENABLED:
+            try:
+                check_spare_licenses_available_for_registering_new_user(realm, email)
+            except LicenseLimitError:
+                raise ValidationError(
+                    _(
+                        "New members cannot join this organization because all Zulip licenses are in use. Please contact the person who "
+                        "invited you and ask them to increase the number of licenses, then try again."
+                    )
+                )
 
         return email
 
@@ -399,6 +419,9 @@ class OurAuthenticationForm(AuthenticationForm):
 
             if return_data.get("inactive_realm"):
                 raise AssertionError("Programming error: inactive realm in authentication form")
+
+            if return_data.get("password_reset_needed"):
+                raise ValidationError(mark_safe(PASSWORD_RESET_NEEDED_ERROR))
 
             if return_data.get("inactive_user") and not return_data.get("is_mirror_dummy"):
                 # We exclude mirror dummy accounts here. They should be treated as the

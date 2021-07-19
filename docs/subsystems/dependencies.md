@@ -81,7 +81,7 @@ no longer had time for them.
 
 One case where we apply added scrutiny to third-party dependencies is
 JS libraries.  They are a particularly important concern because we
-want to keep the Zulip webapp's JS bundle small, so that Zulip
+want to keep the Zulip web app's JS bundle small, so that Zulip
 continues to load quickly on systems with low network bandwidth.
 We'll look at large JS libraries with much greater scrutiny for
 whether their functionality justifies their size than Python
@@ -192,7 +192,7 @@ highlighting.  The system is largely managed by the code in
 * **Mypy type checker**.  Because we're using mypy in a strict mode,
   when you add use of a new Python dependency, you usually need to
   either adds stubs to the `stubs/` directory for the library, or edit
-  `mypy.ini` in the root of the Zulip project to configure
+  `pyproject.toml` in the root of the Zulip project to configure
   `ignore_missing_imports` for the new library.  See
   [our mypy docs][mypy-docs] for more details.
 
@@ -244,17 +244,30 @@ reasoning here.
 
 These are installed by `scripts/lib/install-node` (which in turn uses
 the standard third-party `nvm` installer to download `node` and pin
-its version) and `scripts/lib/third/install-yarn.sh` (the standard
-installer for `yarn`, modified to support installing to a path that is
-not the current user's home directory).
+its version) and `scripts/lib/install-yarn`.
 
 * `nvm` has its own system for installing each version of `node` at
 its own path, which we use, though we install a `/usr/local/bin/node`
 wrapper to access the desired version conveniently and efficiently
 (`nvm` has a lot of startup overhead).
-* `install-yarn.sh` is configured to install `yarn` at
-`/srv/zulip-yarn`.  We don't do anything special to try to manage
-multiple versions of `yarn`.
+* We install `yarn` at `/srv/zulip-yarn`.  We don't do anything
+special to try to manage multiple versions of `yarn`.
+
+## ShellCheck and shfmt
+
+In the development environment, the `tools/setup/install-shellcheck`
+and `tools/setup/install-shfmt` scripts download binaries for
+ShellCheck and shfmt from GitHub, check them against a known hash, and
+install them to `/usr/local/bin`.  These tools are run as part of the
+[linting system](../testing/linters.md).
+
+## Puppet packages
+
+Third-party puppet modules are downloaded from the Puppet Forge into
+subdirectories under `/srv/zulip-puppet-cache`, hashed based on their
+versions; the latest is always symlinked as
+`/srv/zulip-puppet-cache/current`.  `zulip-puppet-apply` installs
+these dependencies immediately before they are needed.
 
 ## Other third-party and generated files
 

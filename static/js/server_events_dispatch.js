@@ -14,19 +14,20 @@ import * as composebox_typeahead from "./composebox_typeahead";
 import * as emoji_picker from "./emoji_picker";
 import * as giphy from "./giphy";
 import * as hotspots from "./hotspots";
-import * as markdown from "./markdown";
+import * as linkifiers from "./linkifiers";
 import * as message_edit from "./message_edit";
 import * as message_events from "./message_events";
 import * as message_flags from "./message_flags";
 import * as message_list from "./message_list";
 import * as message_lists from "./message_lists";
-import * as muting_ui from "./muting_ui";
+import * as muted_topics_ui from "./muted_topics_ui";
+import * as muted_users_ui from "./muted_users_ui";
 import * as narrow_state from "./narrow_state";
+import * as navbar_alerts from "./navbar_alerts";
 import * as night_mode from "./night_mode";
 import * as notifications from "./notifications";
 import * as overlays from "./overlays";
 import {page_params} from "./page_params";
-import * as panels from "./panels";
 import * as peer_data from "./peer_data";
 import * as people from "./people";
 import * as reactions from "./reactions";
@@ -54,10 +55,10 @@ import * as starred_messages from "./starred_messages";
 import * as stream_data from "./stream_data";
 import * as stream_events from "./stream_events";
 import * as stream_list from "./stream_list";
+import * as stream_settings_ui from "./stream_settings_ui";
 import * as stream_topic_history from "./stream_topic_history";
 import * as sub_store from "./sub_store";
 import * as submessage from "./submessage";
-import * as subs from "./subs";
 import * as typing_events from "./typing_events";
 import * as unread_ops from "./unread_ops";
 import * as user_events from "./user_events";
@@ -134,11 +135,11 @@ export function dispatch_normal_event(event) {
             break;
 
         case "muted_topics":
-            muting_ui.handle_topic_updates(event.muted_topics);
+            muted_topics_ui.handle_topic_updates(event.muted_topics);
             break;
 
         case "muted_users":
-            muting_ui.handle_user_updates(event.muted_users);
+            muted_users_ui.handle_user_updates(event.muted_users);
             break;
 
         case "presence":
@@ -179,7 +180,7 @@ export function dispatch_normal_event(event) {
                 allow_edit_history: noop,
                 allow_message_deleting: noop,
                 allow_message_editing: noop,
-                allow_community_topic_editing: noop,
+                edit_topic_policy: noop,
                 user_group_edit_policy: noop,
                 avatar_changes_disabled: settings_account.update_avatar_change_display,
                 bot_creation_policy: settings_bots.update_bot_permissions_ui,
@@ -290,7 +291,7 @@ export function dispatch_normal_event(event) {
             if (page_params.is_admin) {
                 // Update the UI notice about the user's profile being
                 // incomplete, as we might have filled in the missing field(s).
-                panels.show_profile_incomplete(panels.check_profile_incomplete());
+                navbar_alerts.show_profile_incomplete(navbar_alerts.check_profile_incomplete());
             }
             break;
         }
@@ -333,7 +334,7 @@ export function dispatch_normal_event(event) {
 
         case "realm_linkifiers":
             page_params.realm_linkifiers = event.realm_linkifiers;
-            markdown.update_linkifier_rules(page_params.realm_linkifiers);
+            linkifiers.update_linkifier_rules(page_params.realm_linkifiers);
             settings_linkifiers.populate_linkifiers(page_params.realm_linkifiers);
             break;
 
@@ -398,7 +399,7 @@ export function dispatch_normal_event(event) {
         case "stream":
             switch (event.op) {
                 case "update":
-                    // Legacy: Stream properties are still managed by subs.js on the client side.
+                    // Legacy: Stream properties are still managed by stream_settings_ui.js on the client side.
                     stream_events.update_property(event.stream_id, event.property, event.value, {
                         rendered_description: event.rendered_description,
                         history_public_to_subscribers: event.history_public_to_subscribers,
@@ -411,7 +412,7 @@ export function dispatch_normal_event(event) {
                     for (const stream of event.streams) {
                         const sub = sub_store.get(stream.stream_id);
                         if (overlays.streams_open()) {
-                            subs.add_sub_to_table(sub);
+                            stream_settings_ui.add_sub_to_table(sub);
                         }
                     }
                     break;
@@ -421,7 +422,7 @@ export function dispatch_normal_event(event) {
                         const is_narrowed_to_stream = narrow_state.is_for_stream_id(
                             stream.stream_id,
                         );
-                        subs.remove_stream(stream.stream_id);
+                        stream_settings_ui.remove_stream(stream.stream_id);
                         stream_data.delete_sub(stream.stream_id);
                         if (was_subscribed) {
                             stream_list.remove_sidebar_row(stream.stream_id);
@@ -485,7 +486,7 @@ export function dispatch_normal_event(event) {
 
                     for (const stream_id of stream_ids) {
                         const sub = sub_store.get(stream_id);
-                        subs.update_subscribers_ui(sub);
+                        stream_settings_ui.update_subscribers_ui(sub);
                     }
 
                     compose_fade.update_faded_users();
@@ -499,7 +500,7 @@ export function dispatch_normal_event(event) {
 
                     for (const stream_id of stream_ids) {
                         const sub = sub_store.get(stream_id);
-                        subs.update_subscribers_ui(sub);
+                        stream_settings_ui.update_subscribers_ui(sub);
                     }
 
                     compose_fade.update_faded_users();
@@ -564,7 +565,7 @@ export function dispatch_normal_event(event) {
                 // a reload is fundamentally required because we
                 // cannot rerender with the new language the strings
                 // present in the backend/Jinja2 templates.
-                page_params.default_language_name = event.language_name;
+                settings_display.set_default_language_name(event.language_name);
             }
             if (event.setting_name === "twenty_four_hour_time") {
                 // Rerender the whole message list UI

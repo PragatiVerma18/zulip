@@ -9,10 +9,13 @@ import tempfile
 
 import yaml
 
-from lib.zulip_tools import assert_running_as_root, parse_os_release
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
+
+from scripts.lib.puppet_cache import setup_puppet_modules
+from scripts.lib.zulip_tools import assert_running_as_root, parse_os_release
 
 assert_running_as_root()
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 parser = argparse.ArgumentParser(description="Run Puppet")
 parser.add_argument(
@@ -25,18 +28,31 @@ args, extra_args = parser.parse_known_args()
 config = configparser.RawConfigParser()
 config.read(args.config)
 
+setup_puppet_modules()
+
 distro_info = parse_os_release()
 puppet_config = """
 Exec { path => "/usr/sbin:/usr/bin:/sbin:/bin" }
 """
 
 for pclass in re.split(r"\s*,\s*", config.get("machine", "puppet_classes")):
+    if " " in pclass:
+        print(
+            f"The `machine.puppet_classes` setting in {args.config} must be comma-separated, not space-separated!"
+        )
+        sys.exit(1)
     puppet_config += f"include {pclass}\n"
 
 # We use the Puppet configuration from the same Zulip checkout as this script
 scripts_path = os.path.join(BASE_DIR, "scripts")
 puppet_module_path = os.path.join(BASE_DIR, "puppet")
-puppet_cmd = ["puppet", "apply", f"--modulepath={puppet_module_path}", "-e", puppet_config]
+puppet_cmd = [
+    "puppet",
+    "apply",
+    f"--modulepath={puppet_module_path}:/srv/zulip-puppet-cache/current",
+    "-e",
+    puppet_config,
+]
 if args.noop:
     puppet_cmd += ["--noop"]
 puppet_cmd += extra_args

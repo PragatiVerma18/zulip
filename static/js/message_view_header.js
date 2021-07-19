@@ -6,7 +6,7 @@ import {$t} from "./i18n";
 import * as narrow_state from "./narrow_state";
 import {page_params} from "./page_params";
 import * as peer_data from "./peer_data";
-import * as recent_topics from "./recent_topics";
+import * as recent_topics_util from "./recent_topics_util";
 import * as rendered_markdown from "./rendered_markdown";
 import * as search from "./search";
 
@@ -20,7 +20,7 @@ function get_formatted_sub_count(sub_count) {
 
 function make_message_view_header(filter) {
     const message_view_header = {};
-    if (recent_topics.is_visible()) {
+    if (recent_topics_util.is_visible()) {
         return {
             title: $t({defaultMessage: "Recent topics"}),
             icon: "clock-o",
@@ -53,7 +53,7 @@ function make_message_view_header(filter) {
         message_view_header.formatted_sub_count = get_formatted_sub_count(sub_count);
         // the "title" is passed as a variable and doesn't get translated (nor should it)
         message_view_header.sub_count_tooltip_text = $t(
-            {defaultMessage: "{count} users are subscribed to #{title}"},
+            {defaultMessage: "This stream has {count} subscribers."},
             {count: message_view_header.sub_count, title: message_view_header.title},
         );
         message_view_header.stream_settings_link =

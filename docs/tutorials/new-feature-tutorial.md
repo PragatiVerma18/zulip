@@ -415,7 +415,7 @@ annotation).
  def update_realm(
      request: HttpRequest,
      user_profile: UserProfile,
-     name: Optional[str] = REQ(json_validator=check_string, default=None),
+     name: Optional[str] = REQ(str_validator=check_string, default=None),
      # ...
 +    mandatory_topics: Optional[bool] = REQ(json_validator=check_bool, default=None),
      # ...
@@ -437,7 +437,7 @@ can be handled at the beginning of `update_realm`.
     if default_language is not None and default_language not in get_available_language_codes():
         raise JsonableError(_("Invalid language '%s'" % (default_language,)))
     if description is not None and len(description) > 100:
-        return json_error(_("Realm description cannot exceed 100 characters."))
+        raise JsonableError(_("Realm description cannot exceed 100 characters."))
     # ...
 
 The code in `update_realm` loops through the `property_types` dictionary

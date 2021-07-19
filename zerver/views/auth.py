@@ -24,7 +24,12 @@ from social_django.utils import load_backend, load_strategy
 from two_factor.forms import BackupTokenForm
 from two_factor.views import LoginView as BaseTwoFactorLoginView
 
-from confirmation.models import Confirmation, create_confirmation_link
+from confirmation.models import (
+    Confirmation,
+    ConfirmationKeyException,
+    create_confirmation_link,
+    get_object_from_key,
+)
 from version import API_FEATURE_LEVEL, ZULIP_VERSION
 from zerver.context_processors import get_realm_from_request, login_context, zulip_default_context
 from zerver.decorator import do_login, log_view_func, process_client, require_post
@@ -35,12 +40,21 @@ from zerver.forms import (
     OurAuthenticationForm,
     ZulipPasswordResetForm,
 )
+from zerver.lib.exceptions import (
+    AuthenticationFailedError,
+    InvalidSubdomainError,
+    JsonableError,
+    PasswordAuthDisabledError,
+    PasswordResetRequiredError,
+    RealmDeactivatedError,
+    UserDeactivatedError,
+)
 from zerver.lib.mobile_auth_otp import otp_encrypt_api_key
 from zerver.lib.push_notifications import push_notifications_enabled
 from zerver.lib.pysa import mark_sanitized
 from zerver.lib.realm_icon import realm_icon_url
-from zerver.lib.request import REQ, JsonableError, has_request_variables
-from zerver.lib.response import json_error, json_success
+from zerver.lib.request import REQ, get_request_notes, has_request_variables
+from zerver.lib.response import json_success
 from zerver.lib.sessions import set_expirable_session_var
 from zerver.lib.subdomains import get_subdomain, is_subdomain_root_or_alias
 from zerver.lib.types import ViewFuncT
@@ -50,6 +64,7 @@ from zerver.lib.users import get_api_key
 from zerver.lib.utils import has_api_key_format
 from zerver.lib.validator import validate_login_email
 from zerver.models import (
+    MultiuseInvite,
     PreregistrationUser,
     Realm,
     UserProfile,
@@ -63,6 +78,7 @@ from zproject.backends import (
     AppleAuthBackend,
     ExternalAuthDataDict,
     ExternalAuthResult,
+    GenericOpenIdConnectBackend,
     SAMLAuthBackend,
     ZulipLDAPAuthBackend,
     ZulipLDAPConfigurationError,
@@ -142,7 +158,7 @@ def maybe_send_to_registration(
     # result in being logged into the app to persist if the user makes
     # mistakes while trying to authenticate (E.g. clicks the wrong
     # Google account, hits back, etc.) during a given browser session,
-    # rather than just logging into the webapp in the target browser.
+    # rather than just logging into the web app in the target browser.
     #
     # We can't use our usual pre-account-creation state storage
     # approach of putting something in PreregistrationUser, because
@@ -158,14 +174,18 @@ def maybe_send_to_registration(
             request.session, "registration_desktop_flow_otp", desktop_flow_otp, expiry_seconds=3600
         )
 
+    multiuse_obj: Optional[MultiuseInvite] = None
+    from_multiuse_invite = False
     if multiuse_object_key:
         from_multiuse_invite = True
-        multiuse_obj = Confirmation.objects.get(confirmation_key=multiuse_object_key).content_object
+        try:
+            multiuse_obj = get_object_from_key(multiuse_object_key, Confirmation.MULTIUSE_INVITE)
+        except ConfirmationKeyException:
+            return render(request, "zerver/confirmation_link_expired_error.html", status=404)
+
         realm = multiuse_obj.realm
         invited_as = multiuse_obj.invited_as
     else:
-        from_multiuse_invite = False
-        multiuse_obj = None
         try:
             realm = get_realm(get_subdomain(request))
         except Realm.DoesNotExist:
@@ -283,8 +303,11 @@ def login_or_register_remote_user(request: HttpRequest, result: ExternalAuthResu
     do_login(request, user_profile)
 
     redirect_to = result.data_dict.get("redirect_to", "")
-    if is_realm_creation is not None and settings.FREE_TRIAL_DAYS not in [None, 0]:
-        redirect_to = "{}?onboarding=true".format(reverse("initial_upgrade"))
+    if is_realm_creation is not None and settings.BILLING_ENABLED:
+        from corporate.lib.stripe import is_free_trial_offer_enabled
+
+        if is_free_trial_offer_enabled():
+            redirect_to = "{}?onboarding=true".format(reverse("initial_upgrade"))
 
     redirect_to = get_safe_redirect_to(redirect_to, user_profile.realm.uri)
     return HttpResponseRedirect(redirect_to)
@@ -332,7 +355,7 @@ def finish_mobile_flow(request: HttpRequest, user_profile: UserProfile, otp: str
 
     # Mark this request as having a logged-in user for our server logs.
     process_client(request, user_profile)
-    request._requestor_for_logs = user_profile.format_requestor_for_logs()
+    get_request_notes(request).requestor_for_logs = user_profile.format_requestor_for_logs()
 
     return response
 
@@ -550,6 +573,8 @@ def start_social_login(
 
     if backend == "apple" and not AppleAuthBackend.check_config():
         return config_error(request, "apple")
+    if backend == "oidc" and not GenericOpenIdConnectBackend.check_config():
+        return config_error(request, "oidc")
 
     # TODO: Add AzureAD also.
     if backend in ["github", "google", "gitlab"]:
@@ -806,7 +831,7 @@ def api_fetch_api_key(
 
     realm = get_realm_from_request(request)
     if realm is None:
-        return json_error(_("Invalid subdomain"))
+        raise InvalidSubdomainError()
 
     if not ldap_auth_enabled(realm=realm):
         # In case we don't authenticate against LDAP, check for a valid
@@ -816,27 +841,15 @@ def api_fetch_api_key(
         request=request, username=username, password=password, realm=realm, return_data=return_data
     )
     if return_data.get("inactive_user"):
-        return json_error(
-            _("Your account has been disabled."), data={"reason": "user disable"}, status=403
-        )
+        raise UserDeactivatedError()
     if return_data.get("inactive_realm"):
-        return json_error(
-            _("This organization has been deactivated."),
-            data={"reason": "realm deactivated"},
-            status=403,
-        )
+        raise RealmDeactivatedError()
     if return_data.get("password_auth_disabled"):
-        return json_error(
-            _("Password auth is disabled in your team."),
-            data={"reason": "password auth disabled"},
-            status=403,
-        )
+        raise PasswordAuthDisabledError()
+    if return_data.get("password_reset_needed"):
+        raise PasswordResetRequiredError()
     if user_profile is None:
-        return json_error(
-            _("Your username or password is incorrect."),
-            data={"reason": "incorrect_creds"},
-            status=403,
-        )
+        raise AuthenticationFailedError()
 
     # Maybe sending 'user_logged_in' signal is the better approach:
     #   user_logged_in.send(sender=user_profile.__class__, request=request, user=user_profile)
@@ -847,7 +860,7 @@ def api_fetch_api_key(
 
     # Mark this request as having a logged-in user for our server logs.
     process_client(request, user_profile)
-    request._requestor_for_logs = user_profile.format_requestor_for_logs()
+    get_request_notes(request).requestor_for_logs = user_profile.format_requestor_for_logs()
 
     api_key = get_api_key(user_profile)
     return json_success({"api_key": api_key, "email": user_profile.delivery_email})
@@ -923,12 +936,12 @@ def json_fetch_api_key(
 ) -> HttpResponse:
     realm = get_realm_from_request(request)
     if realm is None:
-        return json_error(_("Invalid subdomain"))
+        raise JsonableError(_("Invalid subdomain"))
     if password_auth_enabled(user_profile.realm):
         if not authenticate(
             request=request, username=user_profile.delivery_email, password=password, realm=realm
         ):
-            return json_error(_("Your username or password is incorrect."))
+            raise JsonableError(_("Your username or password is incorrect."))
 
     api_key = get_api_key(user_profile)
     return json_success({"api_key": api_key, "email": user_profile.delivery_email})
@@ -981,6 +994,8 @@ def config_error(request: HttpRequest, error_category_name: str) -> HttpResponse
         "smtp": {"error_name": "smtp_error"},
         "remote_user_backend_disabled": {"error_name": "remoteuser_error_backend_disabled"},
         "remote_user_header_missing": {"error_name": "remoteuser_error_remote_user_header_missing"},
+        # TODO: Improve the config error page for OIDC.
+        "oidc": {"error_name": "oidc_error"},
     }
 
     return render(request, "zerver/config_error.html", contexts[error_category_name])

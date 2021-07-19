@@ -1,7 +1,7 @@
 import $ from "jquery";
 import _ from "lodash";
 
-import render_confirm_delete_user from "../templates/confirm_delete_user.hbs";
+import render_confirm_delete_user from "../templates/confirm_dialog/confirm_delete_user.hbs";
 import render_admin_user_group_list from "../templates/settings/admin_user_group_list.hbs";
 
 import * as channel from "./channel";
@@ -10,6 +10,7 @@ import {$t, $t_html} from "./i18n";
 import {page_params} from "./page_params";
 import * as people from "./people";
 import * as pill_typeahead from "./pill_typeahead";
+import * as settings_data from "./settings_data";
 import * as ui_report from "./ui_report";
 import * as user_groups from "./user_groups";
 import * as user_pill from "./user_pill";
@@ -32,19 +33,16 @@ export function reload() {
     populate_user_groups();
 }
 
-const USER_GROUP_EDIT_POLICY_MEMBERS = 1;
-
 export function can_edit(group_id) {
-    if (page_params.is_admin) {
+    if (!settings_data.user_can_edit_user_groups()) {
+        return false;
+    }
+
+    // Admins and moderators are allowed to edit user groups even if they
+    // are not a member of that user group. Members can edit user groups
+    // only if they belong to that group.
+    if (page_params.is_admin || page_params.is_moderator) {
         return true;
-    }
-
-    if (page_params.is_guest) {
-        return false;
-    }
-
-    if (page_params.realm_user_group_edit_policy !== USER_GROUP_EDIT_POLICY_MEMBERS) {
-        return false;
     }
 
     return user_groups.is_member_of(group_id, people.my_current_user_id());
@@ -275,14 +273,11 @@ export function populate_user_groups() {
 
         const input = pill_container.children(".input");
         if (can_edit(data.id)) {
-            const opts = {update_func: update_cancel_button};
+            const opts = {update_func: update_cancel_button, user: true};
             pill_typeahead.set_up(input, pills, opts);
         }
 
-        (function pill_remove() {
-            if (!can_edit(data.id)) {
-                return;
-            }
+        if (can_edit(data.id)) {
             pills.onPillRemove(() => {
                 // onPillRemove is fired before the pill is removed from
                 // the DOM.
@@ -291,7 +286,7 @@ export function populate_user_groups() {
                     input.trigger("focus");
                 }, 100);
             });
-        })();
+        }
     }
 }
 
@@ -369,13 +364,13 @@ export function set_up() {
             parent: modal_parent,
             html_heading: $t_html({defaultMessage: "Delete user group"}),
             html_body,
-            html_yes_button: $t_html({defaultMessage: "Confirm"}),
             on_click: delete_user_group,
+            fade: true,
         });
     });
 
     $("#user-groups").on("keypress", ".user-group h4 > span", (e) => {
-        if (e.which === 13) {
+        if (e.key === "Enter") {
             e.preventDefault();
         }
     });

@@ -28,7 +28,7 @@ class RealmEmojiTest(ZulipTestCase):
         result = self.client_get("/json/realm/emoji")
         self.assert_json_success(result)
         self.assertEqual(200, result.status_code)
-        self.assertEqual(len(result.json()["emoji"]), 2)
+        self.assert_length(result.json()["emoji"], 2)
 
     def test_list_no_author(self) -> None:
         self.login("iago")
@@ -38,7 +38,7 @@ class RealmEmojiTest(ZulipTestCase):
         result = self.client_get("/json/realm/emoji")
         self.assert_json_success(result)
         content = result.json()
-        self.assertEqual(len(content["emoji"]), 2)
+        self.assert_length(content["emoji"], 2)
         test_emoji = content["emoji"][str(realm_emoji.id)]
         self.assertIsNone(test_emoji["author_id"])
 
@@ -54,7 +54,7 @@ class RealmEmojiTest(ZulipTestCase):
         result = self.client_get("/json/realm/emoji")
         self.assert_json_success(result)
         content = result.json()
-        self.assertEqual(len(content["emoji"]), 2)
+        self.assert_length(content["emoji"], 2)
         test_emoji = content["emoji"][str(realm_emoji.id)]
         self.assertIsNone(test_emoji["author_id"])
 
@@ -73,11 +73,33 @@ class RealmEmojiTest(ZulipTestCase):
         result = self.client_get("/json/realm/emoji")
         content = result.json()
         self.assert_json_success(result)
-        self.assertEqual(len(content["emoji"]), 2)
+        self.assert_length(content["emoji"], 2)
         test_emoji = content["emoji"][str(realm_emoji.id)]
         self.assertIn("author_id", test_emoji)
         author = UserProfile.objects.get(id=test_emoji["author_id"])
         self.assertEqual(author.email, email)
+
+    def test_override_built_in_emoji_by_admin(self) -> None:
+        # Test that only administrators can override built-in emoji.
+        self.login("othello")
+        with get_test_image_file("img.png") as fp1:
+            emoji_data = {"f1": fp1}
+            result = self.client_post("/json/realm/emoji/laughing", info=emoji_data)
+        self.assert_json_error(
+            result,
+            "Only administrators can override built-in emoji.",
+        )
+
+        user = self.example_user("iago")
+        email = user.email
+        self.login_user(user)
+        with get_test_image_file("img.png") as fp1:
+            emoji_data = {"f1": fp1}
+            result = self.client_post("/json/realm/emoji/smile", info=emoji_data)
+        self.assert_json_success(result)
+        self.assertEqual(200, result.status_code)
+        realm_emoji = RealmEmoji.objects.get(name="smile")
+        self.assertEqual(realm_emoji.author.email, email)
 
     def test_realm_emoji_repr(self) -> None:
         realm_emoji = RealmEmoji.objects.get(name="green_tick")
@@ -147,7 +169,7 @@ class RealmEmojiTest(ZulipTestCase):
         self.assert_json_success(result)
         # We only mark an emoji as deactivated instead of
         # removing it from the database.
-        self.assertEqual(len(emojis), 2)
+        self.assert_length(emojis, 2)
         test_emoji = emojis[str(realm_emoji.id)]
         self.assertEqual(test_emoji["deactivated"], True)
 
@@ -158,23 +180,10 @@ class RealmEmojiTest(ZulipTestCase):
         result = self.client_delete("/json/realm/emoji/my_emoji")
         self.assert_json_success(result)
 
-    def test_delete_admins_only(self) -> None:
-        emoji_author = self.example_user("othello")
-        self.login_user(emoji_author)
-        realm = get_realm("zulip")
-        realm.add_emoji_by_admins_only = True
-        realm.save()
-        self.create_test_emoji_with_no_author("my_emoji", realm)
-        result = self.client_delete("/json/realm/emoji/my_emoji")
-        self.assert_json_error(result, "Must be an organization administrator")
-
     def test_delete_admin_or_author(self) -> None:
-        # If any user in a realm can upload the emoji then the user who
-        # uploaded it as well as the admin should be able to delete it.
+        # Admins can delete emoji added by others also.
+        # Non-admins can only delete emoji they added themselves.
         emoji_author = self.example_user("othello")
-        realm = get_realm("zulip")
-        realm.add_emoji_by_admins_only = False
-        realm.save()
 
         self.create_test_emoji("my_emoji_1", emoji_author)
         self.login_user(emoji_author)
@@ -207,7 +216,7 @@ class RealmEmojiTest(ZulipTestCase):
     def test_emoji_upload_file_size_error(self) -> None:
         self.login("iago")
         with get_test_image_file("img.png") as fp:
-            with self.settings(MAX_EMOJI_FILE_SIZE=0):
+            with self.settings(MAX_EMOJI_FILE_SIZE_MIB=0):
                 result = self.client_post("/json/realm/emoji/my_emoji", {"file": fp})
         self.assert_json_error(result, "Uploaded file is larger than the allowed limit of 0 MiB")
 
@@ -237,7 +246,7 @@ class RealmEmojiTest(ZulipTestCase):
         result = self.client_get("/json/realm/emoji")
         emojis = result.json()["emoji"]
         self.assert_json_success(result)
-        self.assertEqual(len(emojis), 3)
+        self.assert_length(emojis, 3)
 
     def test_failed_file_upload(self) -> None:
         self.login("iago")

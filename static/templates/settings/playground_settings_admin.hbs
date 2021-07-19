@@ -7,13 +7,13 @@
                 code. Zulip code blocks that are <z-link-markdown-help>tagged with a programming language</z-link-markdown-help> will have
                 a button visible on hover that allows you to open the code block in the code playground site.
                 {{#*inline "z-link-repl"}}<a href="https://replit.com/" target="_blank" rel="noopener noreferrer">{{> @partial-block}}</a>{{/inline}}
-                {{#*inline "z-link-markdown-help"}}<a href="/help/format-your-message-using-markdown#code" target="_blank" rel="noopener noreferrer">{{> @partial-block}}</a>{{/inline}}
+                {{#*inline "z-link-markdown-help"}}<a href="/help/code-blocks" target="_blank" rel="noopener noreferrer">{{> @partial-block}}</a>{{/inline}}
             {{/tr}}
         </p>
         <p>
             {{#tr}}
             For example, to configure code playgrounds for languages like Python or JavaScript, you could specify the <i>Language</i>
-            and <i>URL Prefix</i> fields as:
+            and <i>URL prefix</i> fields as:
             {{/tr}}
         </p>
         <ul>
@@ -27,7 +27,7 @@
                 <div class="new-playground-form wrapper">
                     <div class="settings-section-title">
                         {{t "Add a new code playground" }}
-                        {{> ../help_link_widget link="/help/add-a-custom-playground" }}
+                        {{> ../help_link_widget link="/help/code-blocks#code-playgrounds" }}
                     </div>
                     <div class="alert" id="admin-playground-status"></div>
                     <div class="control-group">
@@ -36,7 +36,7 @@
                     </div>
                     <div class="control-group">
                         <label for="playground_name" class="control-label"> {{t "Name" }}</label>
-                        <input type="text" id="playground_name" name="name" placeholder="Python3 playground" />
+                        <input type="text" id="playground_name" name="playground_name" autocomplete="off" placeholder="Python3 playground" />
                     </div>
                     <div class="control-group">
                         <label for="playground_url_prefix" class="control-label"> {{t "URL prefix" }}</label>

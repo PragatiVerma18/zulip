@@ -10,10 +10,12 @@ from datetime import timedelta
 from typing import (
     Any,
     Callable,
+    Collection,
     Dict,
     Iterable,
     Iterator,
     List,
+    Mapping,
     Optional,
     Sequence,
     Set,
@@ -37,10 +39,12 @@ from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
 from django.test.testcases import SerializeMixin
 from django.urls import resolve
 from django.utils import translation
+from django.utils.module_loading import import_string
 from django.utils.timezone import now as timezone_now
 from fakeldap import MockLDAP
 from two_factor.models import PhoneDevice
 
+from corporate.models import Customer, CustomerPlan, LicenseLedger
 from zerver.decorator import do_two_factor_login
 from zerver.lib.actions import (
     bulk_add_subscriptions,
@@ -52,6 +56,7 @@ from zerver.lib.actions import (
 )
 from zerver.lib.cache import bounce_key_prefix_for_testing
 from zerver.lib.initial_password import initial_password
+from zerver.lib.notification_data import UserMessageNotificationsData
 from zerver.lib.rate_limiter import bounce_redis_key_prefix_for_testing
 from zerver.lib.sessions import get_session_dict_user
 from zerver.lib.stream_subscription import get_stream_subscriptions_for_user
@@ -68,7 +73,11 @@ from zerver.lib.test_console_output import (
 from zerver.lib.test_helpers import find_key_by_email, instrument_url
 from zerver.lib.users import get_api_key
 from zerver.lib.validator import check_string
-from zerver.lib.webhooks.common import get_fixture_http_headers, standardize_headers
+from zerver.lib.webhooks.common import (
+    check_send_webhook_message,
+    get_fixture_http_headers,
+    standardize_headers,
+)
 from zerver.models import (
     Client,
     Message,
@@ -93,6 +102,10 @@ from zerver.tornado.event_queue import clear_client_event_queues_for_testing
 
 if settings.ZILENCER_ENABLED:
     from zilencer.models import get_remote_server_by_uuid
+
+
+class EmptyResponseError(Exception):
+    pass
 
 
 class UploadSerializeMixin(SerializeMixin):
@@ -199,7 +212,7 @@ Output:
             # An API request; use mobile as the default user agent
             default_user_agent = "ZulipMobile/26.22.145 (iOS 10.3.1)"
         else:
-            # A webapp request; use a browser User-Agent string.
+            # A web app request; use a browser User-Agent string.
             default_user_agent = (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 + "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -494,7 +507,7 @@ Output:
         self.assert_json_error(result, assert_json_error_msg)
 
     def _get_page_params(self, result: HttpResponse) -> Dict[str, Any]:
-        """Helper for parsing page_params after fetching the webapp's home view."""
+        """Helper for parsing page_params after fetching the web app's home view."""
         doc = lxml.html.document_fromstring(result.content)
         [div] = doc.xpath("//div[@id='page-params']")
         page_params_json = div.get("data-params")
@@ -503,22 +516,22 @@ Output:
 
     def check_rendered_logged_in_app(self, result: HttpResponse) -> None:
         """Verifies that a visit of / was a 200 that rendered page_params
-        and not for a logged-out web-public visitor."""
+        and not for a (logged-out) spectator."""
         self.assertEqual(result.status_code, 200)
         page_params = self._get_page_params(result)
-        # It is important to check `is_web_public_visitor` to verify
+        # It is important to check `is_spectator` to verify
         # that we treated this request as a normal logged-in session,
-        # not as a web-public visitor.
-        self.assertEqual(page_params["is_web_public_visitor"], False)
+        # not as a spectator.
+        self.assertEqual(page_params["is_spectator"], False)
 
-    def check_rendered_web_public_visitor(self, result: HttpResponse) -> None:
+    def check_rendered_spectator(self, result: HttpResponse) -> None:
         """Verifies that a visit of / was a 200 that rendered page_params
-        for a logged-out web-public visitor."""
+        for a (logged-out) spectator."""
         self.assertEqual(result.status_code, 200)
         page_params = self._get_page_params(result)
-        # It is important to check `is_web_public_visitor` to verify
-        # that we treated this request to render for a `web_public_visitor`
-        self.assertEqual(page_params["is_web_public_visitor"], True)
+        # It is important to check `is_spectator` to verify
+        # that we treated this request to render for a `spectator`
+        self.assertEqual(page_params["is_spectator"], True)
 
     def login_with_return(
         self, email: str, password: Optional[str] = None, **kwargs: Any
@@ -603,7 +616,7 @@ Output:
     def submit_reg_form_for_user(
         self,
         email: str,
-        password: str,
+        password: Optional[str],
         realm_name: str = "Zulip Test",
         realm_subdomain: str = "zuliptest",
         from_confirmation: str = "",
@@ -613,6 +626,7 @@ Output:
         default_stream_groups: Sequence[str] = [],
         source_realm_id: str = "",
         key: Optional[str] = None,
+        realm_type: Optional[int] = Realm.ORG_TYPES["business"]["id"],
         **kwargs: Any,
     ) -> HttpResponse:
         """
@@ -627,9 +641,9 @@ Output:
             full_name = email.replace("@", "_")
         payload = {
             "full_name": full_name,
-            "password": password,
             "realm_name": realm_name,
             "realm_subdomain": realm_subdomain,
+            "realm_type": realm_type,
             "key": key if key is not None else find_key_by_email(email),
             "timezone": timezone,
             "terms": True,
@@ -637,6 +651,8 @@ Output:
             "default_stream_group": default_stream_groups,
             "source_realm_id": source_realm_id,
         }
+        if password is not None:
+            payload["password"] = password
         if realm_in_root_domain is not None:
             payload["realm_in_root_domain"] = realm_in_root_domain
         return self.client_post("/accounts/register/", payload, **kwargs)
@@ -646,6 +662,8 @@ Output:
         email_address: str,
         *,
         url_pattern: Optional[str] = None,
+        email_subject_contains: Optional[str] = None,
+        email_body_contains: Optional[str] = None,
     ) -> str:
         from django.core.mail import outbox
 
@@ -658,6 +676,13 @@ Output:
             ):
                 match = re.search(url_pattern, message.body)
                 assert match is not None
+
+                if email_subject_contains:
+                    self.assertIn(email_subject_contains, message.subject)
+
+                if email_body_contains:
+                    self.assertIn(email_body_contains, message.body)
+
                 [confirmation_url] = match.groups()
                 return confirmation_url
         else:
@@ -864,14 +889,14 @@ Output:
         """
         self.assertEqual(self.get_json_error(result, status_code=status_code), msg)
 
-    def assert_length(self, items: List[Any], count: int) -> None:
+    def assert_length(self, items: Collection[Any], count: int) -> None:
         actual_count = len(items)
         if actual_count != count:  # nocoverage
-            print("ITEMS:\n")
+            print("\nITEMS:\n")
             for item in items:
                 print(item)
             print(f"\nexpected length: {count}\nactual length: {actual_count}")
-            raise AssertionError("List is unexpected size!")
+            raise AssertionError(f"{str(type(items))} is of unexpected size!")
 
     def assert_json_error_contains(
         self, result: HttpResponse, msg_substring: str, status_code: int = 400
@@ -1008,7 +1033,7 @@ Output:
         streams = sorted(streams, key=lambda x: x.name)
         subscribed_streams = gather_subscriptions(self.nonreg_user(user_name))[0]
 
-        self.assertEqual(len(subscribed_streams), len(streams))
+        self.assert_length(subscribed_streams, len(streams))
 
         for x, y in zip(subscribed_streams, streams):
             self.assertEqual(x["name"], y.name)
@@ -1048,7 +1073,7 @@ Output:
         msg = self.get_last_message()
 
         if msg.id == prior_msg.id:
-            raise Exception(
+            raise EmptyResponseError(
                 """
                 Your test code called an endpoint that did
                 not write any new messages.  It is probably
@@ -1254,20 +1279,121 @@ Output:
         self.assertTrue(validation_func(new_member_user))
         self.assertFalse(validation_func(guest_user))
 
+    def subscribe_realm_to_manual_license_management_plan(
+        self, realm: Realm, licenses: int, licenses_at_next_renewal: int, billing_schedule: int
+    ) -> Tuple[CustomerPlan, LicenseLedger]:
+        customer, _ = Customer.objects.get_or_create(realm=realm)
+        plan = CustomerPlan.objects.create(
+            customer=customer,
+            automanage_licenses=False,
+            billing_cycle_anchor=timezone_now(),
+            billing_schedule=billing_schedule,
+            tier=CustomerPlan.STANDARD,
+        )
+        ledger = LicenseLedger.objects.create(
+            plan=plan,
+            is_renewal=True,
+            event_time=timezone_now(),
+            licenses=licenses,
+            licenses_at_next_renewal=licenses_at_next_renewal,
+        )
+        realm.plan_type = Realm.STANDARD
+        realm.save(update_fields=["plan_type"])
+        return plan, ledger
+
+    def subscribe_realm_to_monthly_plan_on_manual_license_management(
+        self, realm: Realm, licenses: int, licenses_at_next_renewal: int
+    ) -> Tuple[CustomerPlan, LicenseLedger]:
+        return self.subscribe_realm_to_manual_license_management_plan(
+            realm, licenses, licenses_at_next_renewal, CustomerPlan.MONTHLY
+        )
+
+    @contextmanager
+    def tornado_redirected_to_list(
+        self, lst: List[Mapping[str, Any]], expected_num_events: int
+    ) -> Iterator[None]:
+        lst.clear()
+
+        # process_notification takes a single parameter called 'notice'.
+        # lst.append takes a single argument called 'object'.
+        # Some code might call process_notification using keyword arguments,
+        # so mypy doesn't allow assigning lst.append to process_notification
+        # So explicitly change parameter name to 'notice' to work around this problem
+        with mock.patch(
+            "zerver.tornado.django_api.process_notification", lambda notice: lst.append(notice)
+        ):
+            # Some `send_event` calls need to be executed only after the current transaction
+            # commits (using `on_commit` hooks). Because the transaction in Django tests never
+            # commits (rather, gets rolled back after the test completes), such events would
+            # never be sent in tests, and we would be unable to verify them. Hence, we use
+            # this helper to make sure the `send_event` calls actually run.
+            with self.captureOnCommitCallbacks(execute=True):
+                yield
+
+        self.assert_length(lst, expected_num_events)
+
+    def create_user_notifications_data_object(
+        self, *, user_id: int, **kwargs: Any
+    ) -> UserMessageNotificationsData:
+        return UserMessageNotificationsData(
+            user_id=user_id,
+            flags=kwargs.get("flags", []),
+            mentioned=kwargs.get("mentioned", False),
+            online_push_enabled=kwargs.get("online_push_enabled", False),
+            stream_email_notify=kwargs.get("stream_email_notify", False),
+            stream_push_notify=kwargs.get("stream_push_notify", False),
+            wildcard_mention_notify=kwargs.get("wildcard_mention_notify", False),
+            sender_is_muted=kwargs.get("sender_is_muted", False),
+        )
+
+    def get_maybe_enqueue_notifications_parameters(
+        self, *, message_id: int, user_id: int, acting_user_id: int, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """
+        Returns a dictionary with the passed parameters, after filling up the
+        missing data with default values, for testing what was passed to the
+        `maybe_enqueue_notifications` method.
+        """
+        user_notifications_data = self.create_user_notifications_data_object(
+            user_id=user_id, **kwargs
+        )
+        return dict(
+            user_notifications_data=user_notifications_data,
+            message_id=message_id,
+            acting_user_id=acting_user_id,
+            private_message=kwargs.get("private_message", False),
+            mentioned_user_group_id=kwargs.get("mentioned_user_group_id", None),
+            idle=kwargs.get("idle", True),
+            already_notified=kwargs.get(
+                "already_notified", {"email_notified": False, "push_notified": False}
+            ),
+        )
+
 
 class WebhookTestCase(ZulipTestCase):
-    """
-    Common for all webhooks tests
+    """Shared test class for all incoming webhooks tests.
 
-    Override below class attributes and run send_and_test_message
-    If you create your URL in uncommon way you can override build_webhook_url method
-    In case that you need modify body or create it without using fixture you can also override get_body method
+    Used by configuring the below class attributes, and calling
+    send_and_test_message in individual tests.
+
+    * Tests can override build_webhook_url if the webhook requires a
+      different URL format.
+
+    * Tests can override get_body for cases where there is no
+      available fixture file.
+
+    * Tests should specify WEBHOOK_DIR_NAME to enforce that all event
+      types are declared in the @webhook_view decorator. This is
+      important for ensuring we document all fully supported event types.
     """
 
     STREAM_NAME: Optional[str] = None
     TEST_USER_EMAIL = "webhook-bot@zulip.com"
     URL_TEMPLATE: str
-    FIXTURE_DIR_NAME: Optional[str] = None
+    WEBHOOK_DIR_NAME: Optional[str] = None
+    # This last parameter is a workaround to handle webhooks that do not
+    # name the main function api_{WEBHOOK_DIR_NAME}_webhook.
+    VIEW_FUNCTION_NAME: Optional[str] = None
 
     @property
     def test_user(self) -> UserProfile:
@@ -1277,6 +1403,52 @@ class WebhookTestCase(ZulipTestCase):
         super().setUp()
         self.url = self.build_webhook_url()
 
+        if self.WEBHOOK_DIR_NAME is not None and self.VIEW_FUNCTION_NAME is not None:
+            # If VIEW_FUNCTION_NAME is explicitly specified and
+            # WEBHOOK_DIR_NAME is not None, an exception will be
+            # raised when a test triggers events that are not
+            # explicitly specified via the event_types parameter to
+            # the @webhook_view decorator.
+            function = import_string(
+                f"zerver.webhooks.{self.WEBHOOK_DIR_NAME}.view.{self.VIEW_FUNCTION_NAME}"
+            )
+            all_event_types = None
+
+            if hasattr(function, "_all_event_types"):
+                all_event_types = function._all_event_types
+
+            if all_event_types is None:
+                return  # nocoverage
+
+            def side_effect(*args: Any, **kwargs: Any) -> None:
+                complete_event_type = (
+                    kwargs.get("complete_event_type")
+                    if len(args) < 5
+                    else args[4]  # complete_event_type is the argument at index 4
+                )
+                if (
+                    complete_event_type is not None
+                    and all_event_types is not None
+                    and complete_event_type not in all_event_types
+                ):
+                    raise Exception(
+                        f"""
+Error: This test triggered a message using the event "{complete_event_type}", which was not properly
+registered via the @webhook_view(..., event_types=[...]). These registrations are important for Zulip
+self-documenting the supported event types for this integration.
+
+You can fix this by adding "{complete_event_type}" to ALL_EVENT_TYPES for this webhook.
+""".strip()
+                    )
+                check_send_webhook_message(*args, **kwargs)
+
+            self.patch = mock.patch(
+                f"zerver.webhooks.{self.WEBHOOK_DIR_NAME}.view.check_send_webhook_message",
+                side_effect=side_effect,
+            )
+            self.patch.start()
+            self.addCleanup(self.patch.stop)
+
     def api_stream_message(self, user: UserProfile, *args: Any, **kwargs: Any) -> HttpResponse:
         kwargs["HTTP_AUTHORIZATION"] = self.encode_user(user)
         return self.check_webhook(*args, **kwargs)
@@ -1284,9 +1456,10 @@ class WebhookTestCase(ZulipTestCase):
     def check_webhook(
         self,
         fixture_name: str,
-        expected_topic: str,
-        expected_message: str,
+        expected_topic: Optional[str] = None,
+        expected_message: Optional[str] = None,
         content_type: Optional[str] = "application/json",
+        expect_noop: Optional[bool] = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -1306,6 +1479,8 @@ class WebhookTestCase(ZulipTestCase):
 
         For the rare cases of webhooks actually sending private messages,
         see send_and_test_private_message.
+
+        When no message is expected to be sent, set `expect_noop` to True.
         """
         assert self.STREAM_NAME is not None
         self.subscribe(self.test_user, self.STREAM_NAME)
@@ -1313,17 +1488,34 @@ class WebhookTestCase(ZulipTestCase):
         payload = self.get_payload(fixture_name)
         if content_type is not None:
             kwargs["content_type"] = content_type
-        if self.FIXTURE_DIR_NAME is not None:
-            headers = get_fixture_http_headers(self.FIXTURE_DIR_NAME, fixture_name)
+        if self.WEBHOOK_DIR_NAME is not None:
+            headers = get_fixture_http_headers(self.WEBHOOK_DIR_NAME, fixture_name)
             headers = standardize_headers(headers)
             kwargs.update(headers)
+        try:
+            msg = self.send_webhook_payload(
+                self.test_user,
+                self.url,
+                payload,
+                **kwargs,
+            )
+        except EmptyResponseError:
+            if expect_noop:
+                return
+            else:
+                raise AssertionError(
+                    "No message was sent. Pass expect_noop=True if this is intentional."
+                )
 
-        msg = self.send_webhook_payload(
-            self.test_user,
-            self.url,
-            payload,
-            **kwargs,
-        )
+        if expect_noop:
+            raise Exception(
+                """
+While no message is expected given expect_noop=True,
+your test code triggered an endpoint that did write
+one or more new messages.
+""".strip()
+            )
+        assert expected_message is not None and expected_topic is not None
 
         self.assert_stream_message(
             message=msg,
@@ -1360,8 +1552,8 @@ class WebhookTestCase(ZulipTestCase):
         payload = self.get_payload(fixture_name)
         kwargs["content_type"] = content_type
 
-        if self.FIXTURE_DIR_NAME is not None:
-            headers = get_fixture_http_headers(self.FIXTURE_DIR_NAME, fixture_name)
+        if self.WEBHOOK_DIR_NAME is not None:
+            headers = get_fixture_http_headers(self.WEBHOOK_DIR_NAME, fixture_name)
             headers = standardize_headers(headers)
             kwargs.update(headers)
         # The sender profile shouldn't be passed any further in kwargs, so we pop it.
@@ -1405,8 +1597,8 @@ class WebhookTestCase(ZulipTestCase):
         return self.get_body(fixture_name)
 
     def get_body(self, fixture_name: str) -> str:
-        assert self.FIXTURE_DIR_NAME is not None
-        body = self.webhook_fixture_data(self.FIXTURE_DIR_NAME, fixture_name)
+        assert self.WEBHOOK_DIR_NAME is not None
+        body = self.webhook_fixture_data(self.WEBHOOK_DIR_NAME, fixture_name)
         # fail fast if we don't have valid json
         orjson.loads(body)
         return body

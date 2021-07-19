@@ -3,6 +3,7 @@ from unittest import mock
 
 import orjson
 
+from zerver.lib.actions import do_deactivate_user
 from zerver.lib.cache import cache_get, get_muting_users_cache_key
 from zerver.lib.test_classes import ZulipTestCase
 from zerver.lib.timestamp import datetime_to_timestamp
@@ -26,7 +27,7 @@ class MutedUsersTests(ZulipTestCase):
             self.assert_json_success(result)
 
         muted_users = get_user_mutes(hamlet)
-        self.assertEqual(len(muted_users), 1)
+        self.assert_length(muted_users, 1)
 
         self.assertDictEqual(
             muted_users[0],
@@ -76,11 +77,14 @@ class MutedUsersTests(ZulipTestCase):
         result = self.api_post(hamlet, url)
         self.assert_json_error(result, "User already muted")
 
-    def test_add_muted_user_valid_data(self) -> None:
+    def _test_add_muted_user_valid_data(self, deactivate_user: bool = False) -> None:
         hamlet = self.example_user("hamlet")
         self.login_user(hamlet)
         cordelia = self.example_user("cordelia")
         mute_time = datetime(2021, 1, 1, tzinfo=timezone.utc)
+
+        if deactivate_user:
+            do_deactivate_user(cordelia, acting_user=None)
 
         with mock.patch("zerver.views.muting.timezone_now", return_value=mute_time):
             url = "/api/v1/users/me/muted_users/{}".format(cordelia.id)
@@ -101,7 +105,7 @@ class MutedUsersTests(ZulipTestCase):
                 "event_type", "event_time", "extra_data"
             )
         )
-        self.assertEqual(len(audit_log_entries), 1)
+        self.assert_length(audit_log_entries, 1)
         audit_log_entry = audit_log_entries[0]
         self.assertEqual(
             audit_log_entry,
@@ -112,6 +116,12 @@ class MutedUsersTests(ZulipTestCase):
             ),
         )
 
+    def test_add_muted_user_valid_data(self) -> None:
+        self._test_add_muted_user_valid_data()
+
+    def test_add_muted_user_deactivated_user(self) -> None:
+        self._test_add_muted_user_valid_data(deactivate_user=True)
+
     def test_remove_muted_user_unmute_before_muting(self) -> None:
         hamlet = self.example_user("hamlet")
         self.login_user(hamlet)
@@ -121,11 +131,14 @@ class MutedUsersTests(ZulipTestCase):
         result = self.api_delete(hamlet, url)
         self.assert_json_error(result, "User is not muted")
 
-    def test_remove_muted_user_valid_data(self) -> None:
+    def _test_remove_muted_user_valid_data(self, deactivate_user: bool = False) -> None:
         hamlet = self.example_user("hamlet")
         self.login_user(hamlet)
         cordelia = self.example_user("cordelia")
         mute_time = datetime(2021, 1, 1, tzinfo=timezone.utc)
+
+        if deactivate_user:
+            do_deactivate_user(cordelia, acting_user=None)
 
         with mock.patch("zerver.views.muting.timezone_now", return_value=mute_time):
             url = "/api/v1/users/me/muted_users/{}".format(cordelia.id)
@@ -152,7 +165,7 @@ class MutedUsersTests(ZulipTestCase):
             .values_list("event_type", "event_time", "extra_data")
             .order_by("id")
         )
-        self.assertEqual(len(audit_log_entries), 2)
+        self.assert_length(audit_log_entries, 2)
         audit_log_entry = audit_log_entries[1]
         self.assertEqual(
             audit_log_entry,
@@ -163,28 +176,34 @@ class MutedUsersTests(ZulipTestCase):
             ),
         )
 
+    def test_remove_muted_user_valid_data(self) -> None:
+        self._test_remove_muted_user_valid_data()
+
+    def test_remove_muted_user_deactivated_user(self) -> None:
+        self._test_remove_muted_user_valid_data(deactivate_user=True)
+
     def test_get_muting_users(self) -> None:
         hamlet = self.example_user("hamlet")
         self.login_user(hamlet)
         cordelia = self.example_user("cordelia")
 
-        self.assertEqual(None, cache_get(get_muting_users_cache_key(cordelia)))
-        self.assertEqual(set(), get_muting_users(cordelia))
-        self.assertEqual(set(), cache_get(get_muting_users_cache_key(cordelia))[0])
+        self.assertEqual(None, cache_get(get_muting_users_cache_key(cordelia.id)))
+        self.assertEqual(set(), get_muting_users(cordelia.id))
+        self.assertEqual(set(), cache_get(get_muting_users_cache_key(cordelia.id))[0])
 
         url = "/api/v1/users/me/muted_users/{}".format(cordelia.id)
         result = self.api_post(hamlet, url)
         self.assert_json_success(result)
-        self.assertEqual(None, cache_get(get_muting_users_cache_key(cordelia)))
-        self.assertEqual({hamlet.id}, get_muting_users(cordelia))
-        self.assertEqual({hamlet.id}, cache_get(get_muting_users_cache_key(cordelia))[0])
+        self.assertEqual(None, cache_get(get_muting_users_cache_key(cordelia.id)))
+        self.assertEqual({hamlet.id}, get_muting_users(cordelia.id))
+        self.assertEqual({hamlet.id}, cache_get(get_muting_users_cache_key(cordelia.id))[0])
 
         url = "/api/v1/users/me/muted_users/{}".format(cordelia.id)
         result = self.api_delete(hamlet, url)
         self.assert_json_success(result)
-        self.assertEqual(None, cache_get(get_muting_users_cache_key(cordelia)))
-        self.assertEqual(set(), get_muting_users(cordelia))
-        self.assertEqual(set(), cache_get(get_muting_users_cache_key(cordelia))[0])
+        self.assertEqual(None, cache_get(get_muting_users_cache_key(cordelia.id)))
+        self.assertEqual(set(), get_muting_users(cordelia.id))
+        self.assertEqual(set(), cache_get(get_muting_users_cache_key(cordelia.id))[0])
 
     def assert_usermessage_read_flag(self, user: UserProfile, message: int, flag: bool) -> None:
         usermesaage = UserMessage.objects.get(
@@ -265,3 +284,75 @@ class MutedUsersTests(ZulipTestCase):
         self.assert_usermessage_read_flag(othello, stream_message, False)
         self.assert_usermessage_read_flag(othello, huddle_message, False)
         self.assert_usermessage_read_flag(othello, pm_to_othello, False)
+
+    def test_muted_message_send_notifications_not_enqueued(self) -> None:
+        hamlet = self.example_user("hamlet")
+        self.login_user(hamlet)
+        cordelia = self.example_user("cordelia")
+
+        # No muting involved. Notification about to be enqueued for Hamlet.
+        with mock.patch("zerver.tornado.event_queue.maybe_enqueue_notifications") as m:
+            self.send_personal_message(cordelia, hamlet)
+            m.assert_called_once()
+
+        # Hamlet mutes Cordelia.
+        url = "/api/v1/users/me/muted_users/{}".format(cordelia.id)
+        result = self.api_post(hamlet, url)
+        self.assert_json_success(result)
+
+        # Cordelia has been muted. Notification will not be enqueued for Hamlet.
+        with mock.patch("zerver.tornado.event_queue.maybe_enqueue_notifications") as m:
+            self.send_personal_message(cordelia, hamlet)
+            m.assert_not_called()
+
+    def test_muted_message_edit_notifications_not_enqueued(self) -> None:
+        hamlet = self.example_user("hamlet")
+        self.login_user(hamlet)
+        cordelia = self.example_user("cordelia")
+        self.make_stream("general")
+        self.subscribe(hamlet, "general")
+
+        # No muting. Only Hamlet is subscribed to #general, so only he can potentially recieve
+        # notifications.
+        with mock.patch("zerver.tornado.event_queue.maybe_enqueue_notifications") as m:
+            message_id = self.send_stream_message(cordelia, "general")
+            # Message does not mention Hamlet, so no notification.
+            m.assert_not_called()
+
+        self.login("cordelia")
+        with mock.patch("zerver.tornado.event_queue.maybe_enqueue_notifications") as m:
+            result = self.client_patch(
+                "/json/messages/" + str(message_id),
+                dict(
+                    message_id=message_id,
+                    content="@**King Hamlet**",
+                ),
+            )
+            self.assert_json_success(result)
+            m.assert_called_once()
+            # `maybe_enqueue_notificaions` was called for Hamlet after message edit mentioned him.
+            self.assertEqual(m.call_args_list[0][1]["user_notifications_data"].user_id, hamlet.id)
+
+        # Hamlet mutes Cordelia.
+        self.login("hamlet")
+        url = "/api/v1/users/me/muted_users/{}".format(cordelia.id)
+        result = self.api_post(hamlet, url)
+        self.assert_json_success(result)
+
+        with mock.patch("zerver.tornado.event_queue.maybe_enqueue_notifications") as m:
+            message_id = self.send_stream_message(cordelia, "general")
+            m.assert_not_called()
+
+        self.login("cordelia")
+        with mock.patch("zerver.tornado.event_queue.maybe_enqueue_notifications") as m:
+            result = self.client_patch(
+                "/json/messages/" + str(message_id),
+                dict(
+                    message_id=message_id,
+                    content="@**King Hamlet**",
+                ),
+            )
+            self.assert_json_success(result)
+            # `maybe_enqueue_notificaions` wasn't called for Hamlet after message edit which mentioned him,
+            # because the sender (Cordelia) was muted.
+            m.assert_not_called()

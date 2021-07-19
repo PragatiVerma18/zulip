@@ -8,7 +8,8 @@ import common from "../puppeteer_lib/common";
 const OUTGOING_WEBHOOK_BOT_TYPE = "3";
 const GENERIC_BOT_TYPE = "1";
 
-const zuliprc_regex = /^data:application\/octet-stream;charset=utf-8,\[api]\nemail=.+\nkey=.+\nsite=.+\n$/;
+const zuliprc_regex =
+    /^data:application\/octet-stream;charset=utf-8,\[api]\nemail=.+\nkey=.+\nsite=.+\n$/;
 
 async function get_decoded_url_in_selector(page: Page, selector: string): Promise<string> {
     return await page.evaluate(
@@ -26,30 +27,27 @@ async function open_settings(page: Page): Promise<void> {
     await page.waitForSelector(settings_selector, {visible: true});
     await page.click(settings_selector);
 
-    await page.waitForSelector("#settings_content .account-settings-form", {visible: true});
+    await page.waitForSelector("#settings_content .profile-settings-form", {visible: true});
     const page_url = await common.page_url_with_fragment(page);
-    assert(page_url.includes("/#settings/"), `Page url: ${page_url} does not contain /#settings/`);
+    assert.ok(
+        page_url.includes("/#settings/"),
+        `Page url: ${page_url} does not contain /#settings/`,
+    );
 }
 
 async function test_change_full_name(page: Page): Promise<void> {
-    await page.click("#change_full_name");
-
-    const change_full_name_button_selector = "#change_full_name_button";
-    await page.waitForSelector(change_full_name_button_selector, {visible: true});
+    await page.click("#full_name");
 
     const full_name_input_selector = 'input[name="full_name"]';
-    await page.$eval(full_name_input_selector, (el) => {
-        (el as HTMLInputElement).value = "";
-    });
-    await page.waitForFunction(() => $(":focus").attr("id") === "change_full_name_modal");
-    await page.type(full_name_input_selector, "New name");
-    await page.click(change_full_name_button_selector);
-    await page.waitForFunction(() => $("#change_full_name").text().trim() === "New name");
-    // Ensure that the mouse events are enabled for the background for further tests.
-    await page.waitForFunction(() => $(".overlay.show").attr("style") === undefined);
+    await common.clear_and_type(page, full_name_input_selector, "New name");
+
+    await page.click("#settings_content .profile-settings-form");
+    await page.waitForSelector(".full-name-change-form .alert-success", {visible: true});
+    await page.waitForFunction(() => $("#full_name").val() === "New name");
 }
 
 async function test_change_password(page: Page): Promise<void> {
+    await page.click('[data-section="account-and-privacy"]');
     await page.click("#change_password");
 
     const change_password_button_selector = "#change_password_button";
@@ -61,13 +59,13 @@ async function test_change_password(page: Page): Promise<void> {
     // when the above issue is resolved.
     await page.waitForFunction(() => document.activeElement!.id === "change_password_modal");
     await page.type("#old_password", test_credentials.default_user.password);
-    await page.type("#new_password", "new_password");
+    test_credentials.default_user.password = "new_password";
+    await page.type("#new_password", test_credentials.default_user.password);
     await page.click(change_password_button_selector);
 
     // On success the change password modal gets closed.
     await page.waitForFunction(() => $("#change_password_modal").attr("aria-hidden") === "true");
-    // Ensure that the mouse events are enabled for the background for further tests.
-    await page.waitForFunction(() => $(".overlay.show").attr("style") === undefined);
+    await common.wait_for_modal_to_close(page);
 }
 
 async function test_get_api_key(page: Page): Promise<void> {
@@ -82,7 +80,7 @@ async function test_get_api_key(page: Page): Promise<void> {
     });
 
     // When typing the password in Firefox, it shows "Not Secure" warning
-    // which was hiding the Get API Key button.
+    // which was hiding the Get API key button.
     // You can see the screenshot of it in https://github.com/zulip/zulip/pull/17136.
     // Focusing on it will remove the warning.
     await page.focus(get_api_key_button_selector);
@@ -90,15 +88,14 @@ async function test_get_api_key(page: Page): Promise<void> {
 
     await page.waitForSelector("#show_api_key", {visible: true});
     const api_key = await common.get_text_from_selector(page, "#api_key_value");
-    assert(/[\dA-Za-z]{32}/.test(api_key), "Incorrect API key format.");
+    assert.match(api_key, /[\dA-Za-z]{32}/, "Incorrect API key format.");
 
     const download_zuliprc_selector = "#download_zuliprc";
     await page.click(download_zuliprc_selector);
     const zuliprc_decoded_url = await get_decoded_url_in_selector(page, download_zuliprc_selector);
-    assert(zuliprc_regex.test(zuliprc_decoded_url), "Incorrect zuliprc file");
+    assert.match(zuliprc_decoded_url, zuliprc_regex, "Incorrect zuliprc file");
     await page.click("#api_key_modal .close");
-    // Ensure that the mouse events are enabled for the background for further tests.
-    await page.waitForFunction(() => $(".overlay.show").attr("style") === undefined);
+    await common.wait_for_modal_to_close(page);
 }
 
 async function test_webhook_bot_creation(page: Page): Promise<void> {
@@ -115,14 +112,16 @@ async function test_webhook_bot_creation(page: Page): Promise<void> {
     const download_zuliprc_selector = `.download_bot_zuliprc[data-email="${CSS.escape(
         bot_email,
     )}"]`;
-    const outgoing_webhook_zuliprc_regex = /^data:application\/octet-stream;charset=utf-8,\[api]\nemail=.+\nkey=.+\nsite=.+\ntoken=.+\n$/;
+    const outgoing_webhook_zuliprc_regex =
+        /^data:application\/octet-stream;charset=utf-8,\[api]\nemail=.+\nkey=.+\nsite=.+\ntoken=.+\n$/;
 
     await page.waitForSelector(download_zuliprc_selector, {visible: true});
     await page.click(download_zuliprc_selector);
 
     const zuliprc_decoded_url = await get_decoded_url_in_selector(page, download_zuliprc_selector);
-    assert(
-        outgoing_webhook_zuliprc_regex.test(zuliprc_decoded_url),
+    assert.match(
+        zuliprc_decoded_url,
+        outgoing_webhook_zuliprc_regex,
         "Incorrect outgoing webhook bot zulirc format",
     );
 }
@@ -147,7 +146,7 @@ async function test_normal_bot_creation(page: Page): Promise<void> {
     await page.waitForSelector(download_zuliprc_selector, {visible: true});
     await page.click(download_zuliprc_selector);
     const zuliprc_decoded_url = await get_decoded_url_in_selector(page, download_zuliprc_selector);
-    assert(zuliprc_regex.test(zuliprc_decoded_url), "Incorrect zuliprc format for bot.");
+    assert.match(zuliprc_decoded_url, zuliprc_regex, "Incorrect zuliprc format for bot.");
 }
 
 async function test_botserverrc(page: Page): Promise<void> {
@@ -157,8 +156,9 @@ async function test_botserverrc(page: Page): Promise<void> {
         page,
         "#download_botserverrc",
     );
-    const botserverrc_regex = /^data:application\/octet-stream;charset=utf-8,\[]\nemail=.+\nkey=.+\nsite=.+\ntoken=.+\n$/;
-    assert(botserverrc_regex.test(botserverrc_decoded_url), "Incorrect botserverrc format.");
+    const botserverrc_regex =
+        /^data:application\/octet-stream;charset=utf-8,\[]\nemail=.+\nkey=.+\nsite=.+\ntoken=.+\n$/;
+    assert.match(botserverrc_decoded_url, botserverrc_regex, "Incorrect botserverrc format.");
 }
 
 async function test_edit_bot_form(page: Page): Promise<void> {
@@ -169,7 +169,10 @@ async function test_edit_bot_form(page: Page): Promise<void> {
     const edit_form_selector = `.edit_bot_form[data-email="${CSS.escape(bot1_email)}"]`;
     await page.waitForSelector(edit_form_selector, {visible: true});
     const name_field_selector = edit_form_selector + " [name=bot_name]";
-    assert(common.get_text_from_selector(page, name_field_selector), "Bot 1");
+    assert.equal(
+        await page.$eval(name_field_selector, (el) => (el as HTMLInputElement).value),
+        "Bot 1",
+    );
 
     await common.fill_form(page, edit_form_selector, {bot_name: "Bot one"});
     const save_btn_selector = edit_form_selector + " .edit_bot_button";
@@ -182,8 +185,7 @@ async function test_edit_bot_form(page: Page): Promise<void> {
         `//*[@class="btn open_edit_bot_form" and @data-email="${bot1_email}"]/ancestor::*[@class="details"]/*[@class="name" and text()="Bot one"]`,
     );
 
-    // Ensure that the mouse events are enabled for the background for further tests.
-    await page.waitForFunction(() => $(".overlay.show").attr("style") === undefined);
+    await common.wait_for_modal_to_close(page);
 }
 
 async function test_invalid_edit_bot_form(page: Page): Promise<void> {
@@ -194,7 +196,10 @@ async function test_invalid_edit_bot_form(page: Page): Promise<void> {
     const edit_form_selector = `.edit_bot_form[data-email="${CSS.escape(bot1_email)}"]`;
     await page.waitForSelector(edit_form_selector, {visible: true});
     const name_field_selector = edit_form_selector + " [name=bot_name]";
-    assert(common.get_text_from_selector(page, name_field_selector), "Bot one");
+    assert.equal(
+        await page.$eval(name_field_selector, (el) => (el as HTMLInputElement).value),
+        "Bot one",
+    );
 
     await common.fill_form(page, edit_form_selector, {bot_name: "Bot 2"});
     const save_btn_selector = edit_form_selector + " .edit_bot_button";
@@ -214,8 +219,7 @@ async function test_invalid_edit_bot_form(page: Page): Promise<void> {
         `//*[@class="btn open_edit_bot_form" and @data-email="${bot1_email}"]/ancestor::*[@class="details"]/*[@class="name" and text()="Bot one"]`,
     );
 
-    // Ensure that the mouse events are enabled for the background for further tests.
-    await page.waitForFunction(() => $(".overlay.show").attr("style") === undefined);
+    await common.wait_for_modal_to_close(page);
 }
 
 async function test_your_bots_section(page: Page): Promise<void> {
@@ -381,8 +385,8 @@ async function settings_tests(page: Page): Promise<void> {
     await common.log_in(page);
     await open_settings(page);
     await test_change_full_name(page);
-    await test_get_api_key(page);
     await test_change_password(page);
+    await test_get_api_key(page);
     await test_alert_words_section(page);
     await test_your_bots_section(page);
     await test_default_language_setting(page);

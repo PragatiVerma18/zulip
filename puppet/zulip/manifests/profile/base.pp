@@ -24,8 +24,6 @@ class zulip::profile::base {
         /^9\.[0-9]*$/  => 'stretch',
         /^10\.[0-9]*$/ => 'buster',
         /^11\.[0-9]*$/ => 'bullseye',
-        # This next line is temporary until bullseye releases.
-        /bullseye\/sid/ => 'bullseye',
         # Ubuntu releases
         '12.04' => 'precise',
         '14.04' => 'trusty',
@@ -41,9 +39,7 @@ class zulip::profile::base {
         'python3-yaml',
         'puppet',
         'git',
-        # Used in scripts including install-yarn.sh
         'curl',
-        'wget',
         'jq',
         'procps',
         # Used to read /etc/zulip/zulip.conf for `zulipconf` Puppet function
@@ -68,7 +64,6 @@ class zulip::profile::base {
         'puppet',
         'git',
         'curl',
-        'wget',
         'jq',
         'crudini',
         'ntp',

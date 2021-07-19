@@ -1,25 +1,22 @@
 import calendar
-import datetime
-import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-import pytz
 from django.conf import settings
 from django.http import HttpRequest
 from django.utils import translation
-from django.utils.timezone import now as timezone_now
 from two_factor.utils import default_device
 
+from version import ZULIP_MERGE_BASE
+from zerver.context_processors import get_apps_page_url
 from zerver.lib.events import do_events_register
 from zerver.lib.i18n import (
     get_and_set_request_language,
     get_language_list,
-    get_language_list_for_templates,
-    get_language_name,
     get_language_translation_data,
 )
+from zerver.lib.request import get_request_notes
 from zerver.models import Message, Realm, Stream, UserProfile
 from zerver.views.message_flags import get_latest_update_message_flag_activity
 
@@ -37,41 +34,6 @@ class UserPermissionInfo:
     is_realm_admin: bool
     is_realm_owner: bool
     show_webathena: bool
-
-
-# LAST_SERVER_UPGRADE_TIME is the last time the server had a version deployed.
-if settings.PRODUCTION:  # nocoverage
-    timestamp = os.path.basename(os.path.abspath(settings.DEPLOY_ROOT))
-    LAST_SERVER_UPGRADE_TIME = datetime.datetime.strptime(timestamp, "%Y-%m-%d-%H-%M-%S").replace(
-        tzinfo=pytz.utc
-    )
-else:
-    LAST_SERVER_UPGRADE_TIME = timezone_now()
-
-
-def is_outdated_server(user_profile: Optional[UserProfile]) -> bool:
-    # Release tarballs are unpacked via `tar -xf`, which means the
-    # `mtime` on files in them is preserved from when the release
-    # tarball was built.  Checking this allows us to catch cases where
-    # someone has upgraded in the last year but to a release more than
-    # a year old.
-    git_version_path = os.path.join(settings.DEPLOY_ROOT, "version.py")
-    release_build_time = datetime.datetime.utcfromtimestamp(
-        os.path.getmtime(git_version_path)
-    ).replace(tzinfo=pytz.utc)
-
-    version_no_newer_than = min(LAST_SERVER_UPGRADE_TIME, release_build_time)
-    deadline = version_no_newer_than + datetime.timedelta(
-        days=settings.SERVER_UPGRADE_NAG_DEADLINE_DAYS
-    )
-
-    if user_profile is None or not user_profile.is_realm_admin:
-        # Administrators get warned at the deadline; all users 30 days later.
-        deadline = deadline + datetime.timedelta(days=30)
-
-    if timezone_now() > deadline:
-        return True
-    return False
 
 
 def get_furthest_read_time(user_profile: Optional[UserProfile]) -> Optional[float]:
@@ -101,7 +63,16 @@ def get_bot_types(user_profile: Optional[UserProfile]) -> List[Dict[str, object]
     return bot_types
 
 
-def get_billing_info(user_profile: UserProfile) -> BillingInfo:
+def promote_sponsoring_zulip_in_realm(realm: Realm) -> bool:
+    if not settings.PROMOTE_SPONSORING_ZULIP:
+        return False
+
+    # If PROMOTE_SPONSORING_ZULIP is enabled, advertise sponsoring
+    # Zulip in the gear menu of non-paying organizations.
+    return realm.plan_type in [Realm.STANDARD_FREE, Realm.SELF_HOSTED]
+
+
+def get_billing_info(user_profile: Optional[UserProfile]) -> BillingInfo:
     show_billing = False
     show_plans = False
     if settings.CORPORATE_ENABLED and user_profile is not None:
@@ -118,7 +89,10 @@ def get_billing_info(user_profile: UserProfile) -> BillingInfo:
         if not user_profile.is_guest and user_profile.realm.plan_type == Realm.LIMITED:
             show_plans = True
 
-    return BillingInfo(show_billing=show_billing, show_plans=show_plans)
+    return BillingInfo(
+        show_billing=show_billing,
+        show_plans=show_plans,
+    )
 
 
 def get_user_permission_info(user_profile: Optional[UserProfile]) -> UserPermissionInfo:
@@ -145,7 +119,6 @@ def build_page_params_for_home_page_load(
     user_profile: Optional[UserProfile],
     realm: Realm,
     insecure_desktop_app: bool,
-    has_mobile_devices: bool,
     narrow: List[List[str]],
     narrow_stream: Optional[Stream],
     narrow_topic: Optional[str],
@@ -166,9 +139,11 @@ def build_page_params_for_home_page_load(
     }
 
     if user_profile is not None:
+        client = get_request_notes(request).client
+        assert client is not None
         register_ret = do_events_register(
             user_profile,
-            request.client,
+            client,
             apply_markdown=True,
             client_gravatar=True,
             slim_presence=True,
@@ -177,9 +152,9 @@ def build_page_params_for_home_page_load(
             include_streams=False,
         )
     else:
-        # Since events for web_public_visitor is not implemented, we only fetch the data
+        # Since events for spectator is not implemented, we only fetch the data
         # at the time of request and don't register for any events.
-        # TODO: Implement events for web_public_visitor.
+        # TODO: Implement events for spectator.
         from zerver.lib.events import fetch_initial_state_data, post_process_state
 
         register_ret = fetch_initial_state_data(
@@ -205,42 +180,42 @@ def build_page_params_for_home_page_load(
     )
 
     two_fa_enabled = settings.TWO_FACTOR_AUTHENTICATION_ENABLED and user_profile is not None
+    billing_info = get_billing_info(user_profile)
+    user_permission_info = get_user_permission_info(user_profile)
 
     # Pass parameters to the client-side JavaScript code.
     # These end up in a JavaScript Object named 'page_params'.
     page_params = dict(
-        # Server settings.
-        debug_mode=settings.DEBUG,
+        ## Server settings.
         test_suite=settings.TEST_SUITE,
-        poll_timeout=settings.POLL_TIMEOUT,
         insecure_desktop_app=insecure_desktop_app,
-        server_needs_upgrade=is_outdated_server(user_profile),
         login_page=settings.HOME_NOT_LOGGED_IN,
-        root_domain_uri=settings.ROOT_DOMAIN_URI,
-        save_stacktraces=settings.SAVE_FRONTEND_STACKTRACES,
         warn_no_email=settings.WARN_NO_EMAIL,
         search_pills_enabled=settings.SEARCH_PILLS_ENABLED,
         # Only show marketing email settings if on Zulip Cloud
-        enable_marketing_emails_enabled=settings.CORPORATE_ENABLED,
-        # Misc. extra data.
-        initial_servertime=time.time(),  # Used for calculating relative presence age
-        default_language_name=get_language_name(register_ret["default_language"]),
-        language_list_dbl_col=get_language_list_for_templates(register_ret["default_language"]),
+        corporate_enabled=settings.CORPORATE_ENABLED,
+        ## Misc. extra data.
         language_list=get_language_list(),
         needs_tutorial=needs_tutorial,
         first_in_realm=first_in_realm,
         prompt_for_invites=prompt_for_invites,
         furthest_read_time=furthest_read_time,
-        has_mobile_devices=has_mobile_devices,
         bot_types=get_bot_types(user_profile),
         two_fa_enabled=two_fa_enabled,
+        apps_page_url=get_apps_page_url(),
+        show_billing=billing_info.show_billing,
+        promote_sponsoring_zulip=promote_sponsoring_zulip_in_realm(realm),
+        show_plans=billing_info.show_plans,
+        show_webathena=user_permission_info.show_webathena,
         # Adding two_fa_enabled as condition saves us 3 queries when
         # 2FA is not enabled.
         two_fa_enabled_user=two_fa_enabled and bool(default_device(user_profile)),
-        is_web_public_visitor=user_profile is None,
-        # There is no event queue for web_public_visitors since
-        # events support for web_public_visitors is not implemented yet.
+        is_spectator=user_profile is None,
+        # There is no event queue for spectators since
+        # events support for spectators is not implemented yet.
         no_event_queue=user_profile is None,
+        # Required for about_zulip.hbs
+        zulip_merge_base=ZULIP_MERGE_BASE,
     )
 
     for field_name in register_ret.keys():

@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-# check for the venv
-from lib import sanity_check
-
-sanity_check.check_venv(__file__)
-
 import argparse
 import contextlib
 import glob
@@ -16,6 +11,15 @@ import tempfile
 from typing import Iterator, List
 from unittest import mock
 
+TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(os.path.dirname(TOOLS_DIR))
+sys.path.insert(0, os.path.dirname(TOOLS_DIR))
+
+# check for the venv
+from tools.lib import sanity_check
+
+sanity_check.check_venv(__file__)
+
 import django
 import orjson
 import responses
@@ -26,7 +30,7 @@ target_fully_covered = [
     "analytics/lib/*.py",
     "analytics/models.py",
     "analytics/tests/*.py",
-    "analytics/views.py",
+    "analytics/views/*.py",
     # zerver/ and zerver/lib/ are important core files
     "zerver/*.py",
     "zerver/lib/*.py",
@@ -59,7 +63,11 @@ not_yet_fully_covered = [
     # runs before tests.
     "analytics/lib/fixtures.py",
     # We have 100% coverage on the new stuff; need to refactor old stuff.
-    "analytics/views.py",
+    "analytics/views/activity_common.py",
+    "analytics/views/realm_activity.py",
+    "analytics/views/installation_activity.py",
+    "analytics/views/stats.py",
+    "analytics/views/support.py",
     # Major lib files should have 100% coverage
     "zerver/lib/addressee.py",
     "zerver/lib/markdown/__init__.py",
@@ -98,7 +106,7 @@ not_yet_fully_covered = [
     "zerver/lib/unminify.py",
     "zerver/lib/utils.py",
     "zerver/lib/zephyr.py",
-    "zerver/templatetags/app_filters.py",
+    "zerver/lib/templates.py",
     "zerver/templatetags/minified_js.py",
     # Low priority for coverage
     "zerver/lib/ccache.py",
@@ -181,10 +189,6 @@ class ZulipInternetBlockedError(Exception):
 
 
 def main() -> None:
-    TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(os.path.dirname(TOOLS_DIR))
-    sys.path.insert(0, os.path.dirname(TOOLS_DIR))
-
     default_parallel = os.cpu_count()
 
     # Remove proxy settings for running backend tests

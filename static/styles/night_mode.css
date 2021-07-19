@@ -2,6 +2,16 @@ body.night-mode {
     background-color: hsl(212, 28%, 18%);
     color: hsl(236, 33%, 90%);
 
+    .placeholder {
+        color: hsl(0, 0%, 55%);
+        opacity: 1;
+    }
+
+    textarea::placeholder,
+    input::placeholder {
+        @extend .placeholder;
+    }
+
     a:hover {
         color: hsl(200, 79%, 66%);
     }
@@ -15,6 +25,44 @@ body.night-mode {
 
         &:hover {
             background-color: hsl(211, 29%, 14%);
+        }
+    }
+
+    /* Extend the 'light-border' TippyJS theme, which is intended for
+       popovers/menus that should use default background colors, to use
+       our night theme colors in Zulip's night theme.
+     */
+    .tippy-box[data-theme~="light-border"] {
+        .tippy-content a {
+            color: hsl(236, 33%, 90%);
+        }
+        &[data-placement^="top"] {
+            > .tippy-arrow {
+                &::before {
+                    border-top-color: hsl(235, 18%, 7%);
+                }
+            }
+        }
+        &[data-placement^="bottom"] {
+            > .tippy-arrow {
+                &::before {
+                    border-bottom-color: hsl(235, 18%, 7%);
+                }
+            }
+        }
+        &[data-placement^="left"] {
+            > .tippy-arrow {
+                &::before {
+                    border-left-color: hsl(235, 18%, 7%);
+                }
+            }
+        }
+        &[data-placement^="right"] {
+            > .tippy-arrow {
+                &::before {
+                    border-right-color: hsl(235, 18%, 7%);
+                }
+            }
         }
     }
 
@@ -237,6 +285,11 @@ on a dark background, and don't change the dark labels dark either. */
         }
     }
 
+    /* Disable blue link styling for the message timestamp link. */
+    .message_time {
+        color: hsl(236, 33%, 90%);
+    }
+
     .emoji-popover .reaction:focus {
         box-shadow: 0 0 1px hsl(0, 0%, 98%);
     }
@@ -257,7 +310,7 @@ on a dark background, and don't change the dark labels dark either. */
     }
 
     /* Not that .message_row (below) needs to be more contrast on dark mode */
-    .compose-content,
+    #compose-content,
     .message_list .recipient_row,
     .message_row,
     .draft-row .draft-info-box,
@@ -306,6 +359,7 @@ on a dark background, and don't change the dark labels dark either. */
         box-shadow: 0 0 30px hsl(212, 32%, 7%);
     }
 
+    .tippy-box[data-theme~="light-border"],
     .dropdown-menu ul,
     .dropdown .dropdown-menu,
     .popover,
@@ -323,12 +377,6 @@ on a dark background, and don't change the dark labels dark either. */
     hr {
         color: hsl(212, 28%, 18%);
         opacity: 0.2;
-    }
-
-    #about-zulip {
-        .about-zulip-version {
-            color: hsl(212, 17%, 81%);
-        }
     }
 
     #gear_menu_about_zulip {
@@ -355,6 +403,8 @@ on a dark background, and don't change the dark labels dark either. */
         border-right-color: hsl(235, 18%, 7%);
     }
 
+    .expand_composebox_button,
+    .collapse_composebox_button,
     #message_edit_tooltip,
     .clear_search_button,
     .clear_search_button:focus,
@@ -375,6 +425,8 @@ on a dark background, and don't change the dark labels dark either. */
         color: hsl(236, 33%, 80%);
     }
 
+    .expand_composebox_button:hover,
+    .collapse_composebox_button:hover,
     #message_edit_tooltip:hover,
     .clear_search_button:hover,
     #message_view_header .search_icon:hover,
@@ -443,7 +495,7 @@ on a dark background, and don't change the dark labels dark either. */
         background-color: hsla(0, 0%, 0%, 0.2);
     }
 
-    .recent_avatars_others {
+    .recent_topics_participant_overflow {
         color: hsl(0, 0%, 100%) !important;
         background-color: hsl(211, 18%, 25%) !important;
     }
@@ -538,7 +590,8 @@ on a dark background, and don't change the dark labels dark either. */
     .subscriber-list-box,
     .subscriber-list-box .subscriber_list_container .subscriber-list tr,
     #subscription_overlay ul.grey-box li,
-    #stream_privacy_modal ul.grey-box li,
+    #subscription_overlay .grey-box .radio-input-parent,
+    #stream_privacy_modal .grey-box .radio-input-parent,
     #settings_page .sidebar,
     #settings_page .sidebar *,
     table,
@@ -882,6 +935,13 @@ on a dark background, and don't change the dark labels dark either. */
                 }
             }
         }
+
+        .subscription-group-list,
+        .subscription-stream-list,
+        .subscription-stream-list .user-stream-list tr,
+        .subscription-group-list .user-group-list tr {
+            border-color: hsla(0, 0%, 0%, 0.4);
+        }
     }
 
     /* Arrows: */
@@ -973,14 +1033,6 @@ on a dark background, and don't change the dark labels dark either. */
         border: 1px solid 1px solid hsl(144, 45%, 62%);
     }
 
-    .email_tooltip {
-        background-color: hsl(211, 16%, 30%);
-    }
-
-    .email_tooltip::after {
-        border-bottom-color: hsl(211, 16%, 30%) !important;
-    }
-
     #bots_lists_navbar .active a {
         color: hsl(0, 0%, 87%);
         background-color: hsl(212, 28%, 18%);
@@ -1006,16 +1058,6 @@ on a dark background, and don't change the dark labels dark either. */
     }
 
     .small_square_button {
-        &.small_square_check {
-            background-color: hsl(166, 35%, 52%);
-            color: hsl(0, 0%, 90%);
-
-            &:hover {
-                background-color: hsl(156, 30%, 45%);
-                color: hsl(0, 0%, 95%);
-            }
-        }
-
         &.small_square_x {
             background-color: hsl(0, 0%, 95%);
             color: hsl(0, 0%, 42%);

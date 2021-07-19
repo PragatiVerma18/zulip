@@ -1,12 +1,29 @@
 # Release lifecycle
 
-This page documents how the various components of Zulip released are
-managed as well as our backwards-compatibility and security support
-policies.
+This page details the release lifecycle for the Zulip server and
+client-apps, well as our policies around backwards-compatibility and
+security support policies. In short:
 
-## Server and webapp
+* We recommend always running the latest releases of the Zulip clients
+  and servers. Server upgrades are designed to Just Work; mobile and
+  desktop client apps update automatically.
+* The server and client apps are backwards and forwards compatible
+  across a wide range of versions. So while it's important to upgrade
+  the server to get security updates, bug fixes, and new features, the
+  mobile and desktop apps will continue working for at least 18 months
+  if you don't do so.
+* New server releases are announced via the low-traffic
+  [zulip-announce email
+  list](https://groups.google.com/forum/#!forum/zulip-announce). We
+  highly recommend subscribing so that you are notified about new
+  security releases.
+* Zulip Cloud runs the branch that will become the next major
+  server/web app release, so it is always "newer" than the latest
+  stable release.
 
-The Zulip server and webapp are developed together in the [Zulip
+## Server and web app
+
+The Zulip server and web app are developed together in the [Zulip
 server repository][zulip-server].
 
 ### Stable releases
@@ -22,9 +39,12 @@ server repository][zulip-server].
   fixes, and improvements to Zulip's internals.
 * New maintenance releases, like 4.3, are published roughly once a
   month. Maintenance releases are designed to have no risky changes
-  and be easy to reverse, to minimize stress for administrators.
+  and be easy to reverse, to minimize stress for administrators. When
+  upgrading to a new major release series, We recommend always
+  upgrading to the latest maintenance release in that series, so that
+  you use the latest version of the upgrade code.
 
-Starting with Zulip 4.0, the Zulip webapp displays the current server
+Starting with Zulip 4.0, the Zulip web app displays the current server
 version in the gear menu.  With older releases, the server version is
 available [via the API](https://zulip.com/api/get-server-settings).
 
@@ -55,7 +75,8 @@ in a stable release.
   release.  Self hosters can [upgrade][upgrade-from-git] to these
   stable release branches to get bug fixes staged for the next stable
   release (which is very useful when you reported a bug whose fix we
-  choose to backport).
+  choose to backport). We support these branches as though they were a
+  stable release.
 * Self-hosters who want new features not yet present in a major
   release can [upgrade to master][upgrading-to-master] or run [a fork
   of Zulip][fork-zulip].
@@ -105,7 +126,7 @@ See also our [security model][security-model] documentation.
 
 ### Upgrade nag
 
-Starting with Zulip 4.0, the Zulip webapp will display a banner
+Starting with Zulip 4.0, the Zulip web app will display a banner
 warning users of a server running a Zulip release that is more than 18
 months old. We do this for a few reasons:
 
@@ -183,12 +204,13 @@ of our [upgrade nag](#upgrade-nag).
   connected to organizations hosted by different servers).
 
   The desktop apps automatically update soon after each new
-  release. Because Zulip's desktops apps are implemented in Electron
+  release. Because Zulip's desktop apps are implemented in Electron
   and thus contain a Chromium browser, security-conscious users should
-  not disable automatic updates.
+  leave automatic updates enabled or otherwise arrange to promptly
+  upgrade all users after a new security release.
 
   New desktop app releases rarely contain new features, because the
-  desktop app tab inherits its features from the Zulip server/webapp.
+  desktop app tab inherits its features from the Zulip server/web app.
   However, it is important to upgrade because they often contain
   important security or OS compatibility fixes from the upstream
   Chromium project.

@@ -5,21 +5,21 @@ import random
 import re
 import sys
 
+tools_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.join(tools_dir, "..")
+sys.path.insert(0, root_dir)
+
 # check for the venv
-from lib import sanity_check
+from tools.lib import sanity_check
 
 sanity_check.check_venv(__file__)
 
 from zulint.command import LinterConfig, add_default_linter_arguments
 
-from linter_lib.custom_check import non_py_rules, python_rules
+from tools.linter_lib.custom_check import non_py_rules, python_rules
 
 
 def run() -> None:
-    tools_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(tools_dir)
-    sys.path.insert(0, root_dir)
-
     from tools.lib.test_script import (
         add_provision_check_override_param,
         assert_provisioning_status_ok,
@@ -45,8 +45,29 @@ def run() -> None:
 
     by_lang = linter_config.list_files(
         groups={
-            "backend": ["py", "sh", "pp", "json", "md", "txt", "text", "yaml", "rst", "yml"],
-            "frontend": ["js", "ts", "flow", "css", "hbs", "html", "lock"],
+            "backend": [
+                "bash",
+                "json",
+                "md",
+                "pp",
+                "py",
+                "pyi",
+                "rst",
+                "sh",
+                "text",
+                "txt",
+                "yaml",
+                "yml",
+            ],
+            "frontend": [
+                "css",
+                "flow",
+                "hbs",
+                "html",
+                "js",
+                "lock",
+                "ts",
+            ],
         },
         exclude=EXCLUDED_FILES,
     )
@@ -95,13 +116,13 @@ def run() -> None:
     linter_config.external_linter(
         "shellcheck",
         ["shellcheck", "-x", "-P", "SCRIPTDIR"],
-        ["sh"],
+        ["bash", "sh"],
         description="Standard shell script linter",
     )
     linter_config.external_linter(
         "shfmt",
         ["shfmt"],
-        ["sh"],
+        ["bash", "sh"],
         check_arg="-d",
         fix_arg="-w",
         description="Formats shell scripts",
@@ -112,9 +133,9 @@ def run() -> None:
     linter_config.external_linter(
         "mypy",
         command,
-        ["py"],
+        ["py", "pyi"],
         pass_targets=False,
-        description="Static type checker for Python (config: mypy.ini)",
+        description="Static type checker for Python (config: pyproject.toml)",
     )
     linter_config.external_linter(
         "tsc",
@@ -138,7 +159,7 @@ def run() -> None:
     linter_config.external_linter(
         "isort",
         ["isort"],
-        ["py"],
+        ["py", "pyi"],
         description="Sorts Python import statements",
         check_arg=["--check-only", "--diff"],
     )
@@ -152,7 +173,7 @@ def run() -> None:
     linter_config.external_linter(
         "black",
         ["black"],
-        ["py"],
+        ["py", "pyi"],
         description="Reformats Python code",
         check_arg=["--check"],
         suppress_line=lambda line: line == "All done! ✨ 🍰 ✨\n"
@@ -180,7 +201,7 @@ def run() -> None:
         [*semgrep_command, "--lang=python"],
         ["py"],
         fix_arg="--autofix",
-        description="Syntactic Grep (semgrep) Code Search Tool (config: ./tools/semgrep.yml)",
+        description="Syntactic grep (semgrep) code search tool (config: ./tools/semgrep.yml)",
     )
 
     linter_config.external_linter(
@@ -209,8 +230,8 @@ def run() -> None:
         failed = check_pyflakes(by_lang["py"], args)
         return 1 if failed else 0
 
-    python_part1 = {x for x in by_lang["py"] if random.randint(0, 1) == 0}
-    python_part2 = {y for y in by_lang["py"] if y not in python_part1}
+    python_part1 = {x for x in by_lang["py"] + by_lang["pyi"] if random.randint(0, 1) == 0}
+    python_part2 = {y for y in by_lang["py"] + by_lang["pyi"] if y not in python_part1}
 
     @linter_config.lint
     def pep8_1of2() -> int:

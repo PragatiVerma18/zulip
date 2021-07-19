@@ -6,7 +6,7 @@ const {mock_esm, zrequire} = require("../zjsunit/namespace");
 const {run_test} = require("../zjsunit/test");
 const blueslip = require("../zjsunit/zblueslip");
 
-mock_esm("../../static/js/muting", {
+mock_esm("../../static/js/muted_topics", {
     is_topic_muted: () => false,
 });
 
@@ -49,7 +49,7 @@ run_test("get_unread_ids", () => {
     let terms;
 
     const sub = {
-        name: "My Stream",
+        name: "My stream",
         stream_id: 55,
     };
 
@@ -130,6 +130,11 @@ run_test("get_unread_ids", () => {
     unread_ids = candidate_ids();
     assert.deepEqual(unread_ids, [stream_msg.id]);
 
+    terms = [{operator: "is", operand: "resolved"}];
+    set_filter(terms);
+    unread_ids = candidate_ids();
+    assert.deepEqual(unread_ids, [stream_msg.id]);
+
     terms = [{operator: "sender", operand: "me@example.com"}];
     set_filter(terms);
     // note that our candidate ids are just "all" ids now
@@ -191,7 +196,7 @@ run_test("get_unread_ids", () => {
     });
 });
 
-run_test("defensive code", (override) => {
+run_test("defensive code", ({override}) => {
     // Test defensive code.  We actually avoid calling
     // _possible_unread_message_ids for any case where we
     // couldn't compute the unread message ids, but that

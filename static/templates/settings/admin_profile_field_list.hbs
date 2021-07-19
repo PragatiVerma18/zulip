@@ -15,11 +15,11 @@
     </td>
     {{#if ../can_modify}}
     <td>
-        <button class="button rounded small delete btn-danger" title="{{t 'Delete' }}" data-profile-field-id="{{id}}">
-            <i class="fa fa-trash-o" aria-hidden="true"></i>
-        </button>
         <button class="button rounded small btn-warning open-edit-form" title="{{t 'Edit' }}" data-profile-field-id="{{id}}">
             <i class="fa fa-pencil" aria-hidden="true"></i>
+        </button>
+        <button class="button rounded small delete btn-danger" title="{{t 'Delete' }}" data-profile-field-id="{{id}}">
+            <i class="fa fa-trash-o" aria-hidden="true"></i>
         </button>
     </td>
     {{/if}}
@@ -27,7 +27,7 @@
 <tr class="profile-field-form" data-profile-field-id="{{id}}" style="display: none;">
     <td colspan="3">
         <form class="form-horizontal name-setting">
-            <div class="input-group name_change_container">
+            <div class="input-group">
                 <label for="name">{{t "Name" }}</label>
                 <input type="text" name="name" value="{{ name }}" maxlength="40" />
             </div>

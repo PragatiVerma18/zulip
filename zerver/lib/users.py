@@ -1,7 +1,7 @@
 import re
 import unicodedata
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -18,8 +18,7 @@ from zerver.lib.cache import (
     user_profile_by_id_cache_key,
     user_profile_cache_key_id,
 )
-from zerver.lib.exceptions import OrganizationAdministratorRequired
-from zerver.lib.request import JsonableError
+from zerver.lib.exceptions import JsonableError, OrganizationAdministratorRequired
 from zerver.lib.timezone import canonicalize_timezone
 from zerver.models import (
     CustomProfileField,
@@ -349,14 +348,15 @@ def validate_user_custom_profile_data(
             raise JsonableError(error.message)
 
 
-def compute_show_invites_and_add_streams(user_profile: Optional[UserProfile]) -> Tuple[bool, bool]:
-    if user_profile is None:
-        return False, False
+def can_access_delivery_email(user_profile: UserProfile) -> bool:
+    realm = user_profile.realm
+    if realm.email_address_visibility == Realm.EMAIL_ADDRESS_VISIBILITY_ADMINS:
+        return user_profile.is_realm_admin
 
-    if user_profile.is_guest:
-        return False, False
+    if realm.email_address_visibility == Realm.EMAIL_ADDRESS_VISIBILITY_MODERATORS:
+        return user_profile.is_realm_admin or user_profile.is_moderator
 
-    return user_profile.can_invite_others_to_realm(), True
+    return False
 
 
 def format_user_row(
@@ -384,6 +384,7 @@ def format_user_row(
         is_admin=is_admin,
         is_owner=is_owner,
         is_guest=is_guest,
+        is_billing_admin=row["is_billing_admin"],
         role=row["role"],
         is_bot=is_bot,
         full_name=row["full_name"],
@@ -422,10 +423,7 @@ def format_user_row(
             client_gravatar=client_gravatar,
         )
 
-    if acting_user is not None and (
-        realm.email_address_visibility == Realm.EMAIL_ADDRESS_VISIBILITY_ADMINS
-        and acting_user.is_realm_admin
-    ):
+    if acting_user is not None and can_access_delivery_email(acting_user):
         result["delivery_email"] = row["delivery_email"]
 
     if is_bot:

@@ -76,7 +76,7 @@ context is defined and where it can be found.
 ### Backend templates
 
 For text generated in the backend, including logged-out ("portico")
-pages and the webapp's base content, we use the [Jinja2][] template
+pages and the web app's base content, we use the [Jinja2][] template
 engine (files in `templates/zerver`).
 
 The syntax for using conditionals and other common structures can be
@@ -133,6 +133,10 @@ whenever a template is changed.
 
 All user-facing strings (excluding pages only visible to sysadmins or
 developers) should be tagged for [translation][].
+
+### Tooltips
+
+Zulip uses [TippyJS](https://atomiks.github.io/tippyjs/) for its tooltips.
 
 ## Static asset pipeline
 
@@ -223,7 +227,7 @@ A few useful notes are:
 * Zulip installs static assets in production in
 `/home/zulip/prod-static`.  When a new version is deployed, before the
 server is restarted, files are copied into that directory.
-* We use the VFL (Versioned File Layout) strategy, where each file in
+* We use the VFL (versioned file layout) strategy, where each file in
   the codebase (e.g. `favicon.ico`) gets a new name
   (e.g. `favicon.c55d45ae8c58.ico`) that contains a hash in it.  Each
   deployment, has a manifest file

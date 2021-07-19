@@ -12,9 +12,7 @@ export const initialize = () => {
         image: "/static/images/logo/zulip-icon-128x128.png",
         locale: "auto",
         token(stripe_token) {
-            helpers.create_ajax_request("/json/billing/upgrade", "autopay", stripe_token, [
-                "licenses",
-            ]);
+            helpers.create_ajax_request("/json/billing/upgrade", "autopay", stripe_token);
         },
     });
 
@@ -43,7 +41,7 @@ export const initialize = () => {
             return;
         }
         e.preventDefault();
-        helpers.create_ajax_request("/json/billing/upgrade", "invoice", undefined, ["licenses"]);
+        helpers.create_ajax_request("/json/billing/upgrade", "invoice");
     });
 
     $("#sponsorship-button").on("click", (e) => {
@@ -72,8 +70,9 @@ export const initialize = () => {
         helpers.update_charged_amount(prices, this.value);
     });
 
-    $("select[name=organization-type]").on("change", function () {
-        helpers.update_discount_details(this.value);
+    $("select[name=organization-type]").on("change", (e) => {
+        const string_value = $(e.currentTarget).find(":selected").attr("data-string-value");
+        helpers.update_discount_details(string_value);
     });
 
     $("#autopay_annual_price").text(helpers.format_money(prices.annual));

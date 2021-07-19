@@ -142,10 +142,12 @@ ALL_ZULIP_TABLES = {
     "zerver_realmemoji",
     "zerver_realmfilter",
     "zerver_realmplayground",
+    "zerver_realmuserdefault",
     "zerver_recipient",
     "zerver_scheduledemail",
     "zerver_scheduledemail_users",
     "zerver_scheduledmessage",
+    "zerver_scheduledmessagenotificationemail",
     "zerver_service",
     "zerver_stream",
     "zerver_submessage",
@@ -182,6 +184,8 @@ NON_EXPORTED_TABLES = {
     # missed-message email addresses include the server's hostname and
     # expire after a few days.
     "zerver_missedmessageemailaddress",
+    # Scheduled message notification email data is for internal use by the server.
+    "zerver_scheduledmessagenotificationemail",
     # When switching servers, clients will need to re-log in and
     # reregister for push notifications anyway.
     "zerver_pushdevicetoken",
@@ -1184,7 +1188,7 @@ def write_message_partial_for_query(
         # Figure out the name of our shard file.
         message_filename = os.path.join(output_dir, f"messages-{dump_file_id:06}.json")
         message_filename += ".partial"
-        logging.info("Fetched Messages for %s", message_filename)
+        logging.info("Fetched messages for %s", message_filename)
 
         # Clean up our messages.
         table_data: TableData = {}
@@ -1538,7 +1542,7 @@ def export_emoji_from_local(realm: Realm, local_dir: Path, output_dir: Path) -> 
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         shutil.copy2(local_path, output_path)
-        # Realm Emoji author is optional.
+        # Realm emoji author is optional.
         author = realm_emoji.author
         author_id = None
         if author:
@@ -1830,7 +1834,7 @@ def export_messages_single_user(
             message_chunk.append(item)
 
         message_filename = os.path.join(output_dir, f"messages-{dump_file_id:06}.json")
-        logging.info("Fetched Messages for %s", message_filename)
+        logging.info("Fetched messages for %s", message_filename)
 
         output = {"zerver_message": message_chunk}
         floatify_datetime_fields(output, "zerver_message")

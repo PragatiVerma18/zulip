@@ -33,7 +33,7 @@ VENV_DEPENDENCIES = [
     # because we don't have another place that we install apt packages
     # on upgrade of a production server, and it's not worth adding
     # another call to `apt install` for.
-    "jq",  # Used by scripts/lib/install-node to check yarn version
+    "jq",  # Used by scripts/lib/install-yarn to check yarn version
     "libsasl2-dev",  # For building python-ldap from source
 ]
 
@@ -69,24 +69,6 @@ FEDORA_VENV_DEPENDENCIES = [
     "virtualenv",  # see https://unix.stackexchange.com/questions/27877/install-virtualenv-on-fedora-16
 ]
 
-THUMBOR_VENV_DEPENDENCIES = [
-    "libcurl4-openssl-dev",
-    "libjpeg-dev",
-    "zlib1g-dev",
-    "libfreetype6-dev",
-    "libpng-dev",
-    "gifsicle",
-]
-
-YUM_THUMBOR_VENV_DEPENDENCIES = [
-    "libcurl-devel",
-    "libjpeg-turbo-devel",
-    "zlib-devel",
-    "freetype-devel",
-    "libpng-devel",
-    "gifsicle",
-]
-
 
 def get_venv_dependencies(vendor: str, os_version: str) -> List[str]:
     if "debian" in os_families():
@@ -102,7 +84,17 @@ def get_venv_dependencies(vendor: str, os_version: str) -> List[str]:
 def install_venv_deps(pip: str, requirements_file: str) -> None:
     pip_requirements = os.path.join(ZULIP_PATH, "requirements", "pip.txt")
     run([pip, "install", "--force-reinstall", "--require-hashes", "-r", pip_requirements])
-    run([pip, "install", "--no-deps", "--require-hashes", "-r", requirements_file])
+    run(
+        [
+            pip,
+            "install",
+            "--use-deprecated=legacy-resolver",  # https://github.com/pypa/pip/issues/5780
+            "--no-deps",
+            "--require-hashes",
+            "-r",
+            requirements_file,
+        ]
+    )
 
 
 def get_index_filename(venv_path: str) -> str:

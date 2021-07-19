@@ -20,7 +20,7 @@ const cacheLoader: webpack.RuleSetUseItem = {
     },
 };
 
-export default (_env: unknown, argv: {mode?: string}): webpack.Configuration[] => {
+export default (env: {minimize?: boolean} = {}, argv: {mode?: string}): webpack.Configuration[] => {
     const production: boolean = argv.mode === "production";
 
     const config: webpack.Configuration = {
@@ -177,6 +177,7 @@ export default (_env: unknown, argv: {mode?: string}): webpack.Configuration[] =
         // the source snippets with the eval-* options.
         devtool: production ? "source-map" : "cheap-module-source-map",
         optimization: {
+            minimize: env.minimize ?? production,
             minimizer: [
                 new CssMinimizerPlugin({
                     sourceMap: true,
@@ -189,7 +190,11 @@ export default (_env: unknown, argv: {mode?: string}): webpack.Configuration[] =
                         const out = new CleanCSS({sourceMap: true}).minify({
                             [filename]: {styles, sourceMap},
                         });
-                        return {css: out.styles, map: out.sourceMap, warnings: out.warnings};
+                        return {
+                            css: out.styles,
+                            map: out.sourceMap.toString(),
+                            warnings: out.warnings,
+                        };
                     },
                 }),
                 new TerserPlugin({
@@ -218,13 +223,9 @@ export default (_env: unknown, argv: {mode?: string}): webpack.Configuration[] =
             new DebugRequirePlugin(),
             new BundleTracker({
                 filename: production
-                    ? "../../webpack-stats-production.json"
-                    : "../../var/webpack-stats-dev.json",
+                    ? "webpack-stats-production.json"
+                    : "var/webpack-stats-dev.json",
                 relativePath: true,
-                // Respecify many defaults until https://github.com/django-webpack/webpack-bundle-tracker/pull/55 is merged
-                path: path.resolve(__dirname, "static/webpack-bundles"),
-                integrity: false,
-                integrityHashes: [],
             }),
             ...(production
                 ? []

@@ -20,7 +20,8 @@ function rerender_ui() {
         return;
     }
 
-    const unmatched_streams = stream_settings_data.get_unmatched_streams_for_notification_settings();
+    const unmatched_streams =
+        stream_settings_data.get_unmatched_streams_for_notification_settings();
 
     unmatched_streams_table.find(".stream-row").remove();
 
@@ -42,9 +43,9 @@ function rerender_ui() {
     }
 }
 
-function change_notification_setting(setting, setting_data, status_element) {
+function change_notification_setting(setting, value, status_element) {
     const data = {};
-    data[setting] = JSON.stringify(setting_data);
+    data[setting] = value;
     settings_ui.do_settings_change(
         channel.patch,
         "/json/settings/notifications",
@@ -67,7 +68,7 @@ export function set_enable_digest_emails_visibility() {
 }
 
 export function set_enable_marketing_emails_visibility() {
-    if (page_params.enable_marketing_emails_enabled) {
+    if (page_params.corporate_enabled) {
         $("#enable_marketing_emails_label").parent().show();
     } else {
         $("#enable_marketing_emails_label").parent().hide();

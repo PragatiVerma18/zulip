@@ -1,17 +1,20 @@
 from typing import Optional
 
+from django.db import transaction
 from django.http import HttpRequest, HttpResponse
 from django.utils.translation import gettext as _
 
-from zerver.decorator import REQ, has_request_variables
 from zerver.lib.actions import check_add_reaction, do_remove_reaction
 from zerver.lib.emoji import emoji_name_to_emoji_code
+from zerver.lib.exceptions import JsonableError
 from zerver.lib.message import access_message
-from zerver.lib.request import JsonableError
+from zerver.lib.request import REQ, has_request_variables
 from zerver.lib.response import json_success
 from zerver.models import Reaction, UserProfile
 
 
+# transaction.atomic is required since we use FOR UPDATE queries in access_message
+@transaction.atomic
 @has_request_variables
 def add_reaction(
     request: HttpRequest,
@@ -26,6 +29,8 @@ def add_reaction(
     return json_success()
 
 
+# transaction.atomic is required since we use FOR UPDATE queries in access_message
+@transaction.atomic
 @has_request_variables
 def remove_reaction(
     request: HttpRequest,
@@ -35,7 +40,7 @@ def remove_reaction(
     emoji_code: Optional[str] = REQ(default=None),
     reaction_type: str = REQ(default="unicode_emoji"),
 ) -> HttpResponse:
-    message, user_message = access_message(user_profile, message_id)
+    message, user_message = access_message(user_profile, message_id, lock_message=True)
 
     if emoji_code is None:
         if emoji_name is None:

@@ -1,5 +1,10 @@
 # Animated GIFs from GIPHY
 
+!!! tip ""
+    This feature is not available on self-hosted Zulip servers where
+    the [GIPHY integration][configure-giphy] has not been configured
+    by a system administrator.
+
 Zulip integrates with [GIPHY](https://giphy.com), allowing you to
 conveniently search for animated GIFs and include them in your
 messages.
@@ -19,6 +24,9 @@ You can [preview the
 message](/help/preview-your-message-before-sending) before sending to
 see what the message will look like.
 
+Note that some organizations disable [previews of linked
+images](/help/allow-image-link-previews).
+
 ## Restrict maximum rating of GIFs retrieved from GIPHY
 
 {!admin-only.md!}
@@ -37,14 +45,18 @@ this configure or disable GIPHY integration entirely:
 
 {end_tabs}
 
-## Troubleshooting
+## Privacy
 
-* If you don't see the GIPHY icon, this is likely because you are
-  using a self-hosted Zulip server that has not [configured the GIPHY
-  integration][configure-giphy].
+GIPHY is a third-party service owned by Facebook, and any text you
+enter into Zulip's GIPHY search box will be sent by your browser to
+GIPHY's servers via the GIPHY API. Because this request is done
+directly by your browser, GIPHY will be able to see your IP address,
+and may use that data to track you, similar to if you visited the
+GIPHY website and typed the same search keywords there.
 
-[configure-giphy]: https://zulip.readthedocs.io/en/latest/production/giphy-gif-integration.html
+Zulip proxies all external images in messages through the server,
+including those from GIPHY, to prevent images from being used to track
+recipients of GIFs from GIPHY.
 
-* If your GIFs only appear as links after sending them, this is likely
-because the organization has disabled [previews of linked
-images](/help/allow-image-link-previews).
+[configure-giphy]: https://zulip.readthedocs.io/en/stable/production/giphy-gif-integration.html
+

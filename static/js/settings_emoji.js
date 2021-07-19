@@ -2,9 +2,9 @@ import $ from "jquery";
 
 import emoji_codes from "../generated/emoji/emoji_codes.json";
 import * as emoji from "../shared/js/emoji";
+import emoji_settings_warning_modal from "../templates/confirm_dialog/confirm_emoji_settings_warning.hbs";
 import render_admin_emoji_list from "../templates/settings/admin_emoji_list.hbs";
 import render_settings_emoji_settings_tip from "../templates/settings/emoji_settings_tip.hbs";
-import emoji_settings_warning_modal from "../templates/settings/emoji_settings_warning_modal.hbs";
 
 import * as channel from "./channel";
 import * as confirm_dialog from "./confirm_dialog";
@@ -34,7 +34,7 @@ export function can_add_emoji() {
     return !page_params.realm_add_emoji_by_admins_only;
 }
 
-function can_admin_emoji(emoji) {
+function can_delete_emoji(emoji) {
     if (page_params.is_admin) {
         return true;
     }
@@ -42,7 +42,7 @@ function can_admin_emoji(emoji) {
         // If we don't have the author information then only admin is allowed to disable that emoji.
         return false;
     }
-    if (!page_params.realm_add_emoji_by_admins_only && people.is_my_user_id(emoji.author_id)) {
+    if (people.is_my_user_id(emoji.author_id)) {
         return true;
     }
     return false;
@@ -81,6 +81,16 @@ function is_default_emoji(emoji_name) {
     return emoji_codes.names.includes(emoji_name);
 }
 
+function is_custom_emoji(emoji_name) {
+    const emoji_data = emoji.get_server_realm_emoji_data();
+    for (const emoji of Object.values(emoji_data)) {
+        if (emoji.name === emoji_name && !emoji.deactivated) {
+            return true;
+        }
+    }
+    return false;
+}
+
 export function populate_emoji() {
     if (!meta.loaded) {
         return;
@@ -108,7 +118,7 @@ export function populate_emoji() {
                         display_name: item.name.replace(/_/g, " "),
                         source_url: item.source_url,
                         author: item.author || "",
-                        can_admin_emoji: can_admin_emoji(item),
+                        can_delete_emoji: can_delete_emoji(item),
                     },
                 });
             }
@@ -239,6 +249,16 @@ export function set_up() {
                 return;
             }
 
+            if (is_custom_emoji(emoji.name)) {
+                ui_report.client_error(
+                    $t_html({
+                        defaultMessage: "Failed: A custom emoji with this name already exists.",
+                    }),
+                    emoji_status,
+                );
+                return;
+            }
+
             if (is_default_emoji(emoji.name)) {
                 const modal_parent = $("#settings_content");
                 const html_body = emoji_settings_warning_modal({
@@ -247,10 +267,10 @@ export function set_up() {
 
                 confirm_dialog.launch({
                     parent: modal_parent,
-                    html_heading: $t_html({defaultMessage: "Override unicode emoji?"}),
+                    html_heading: $t_html({defaultMessage: "Override built-in emoji?"}),
                     html_body,
-                    html_yes_button: $t_html({defaultMessage: "Yes"}),
                     on_click: submit_custom_emoji_request,
+                    fade: true,
                 });
             } else {
                 submit_custom_emoji_request();

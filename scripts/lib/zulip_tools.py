@@ -198,9 +198,9 @@ def get_deployment_lock(error_rerun_script: str) -> None:
                 WARNING
                 + "Another deployment in progress; waiting for lock... "
                 + "(If no deployment is running, rmdir {})".format(LOCK_DIR)
-                + ENDC
+                + ENDC,
+                flush=True,
             )
-            sys.stdout.flush()
             time.sleep(3)
 
     if not got_lock:
@@ -222,7 +222,7 @@ def release_deployment_lock() -> None:
 
 def run(args: Sequence[str], **kwargs: Any) -> None:
     # Output what we're doing in the `set -x` style
-    print("+ {}".format(" ".join(map(shlex.quote, args))))
+    print("+ {}".format(" ".join(map(shlex.quote, args))), flush=True)
 
     try:
         subprocess.check_call(args, **kwargs)
@@ -412,8 +412,9 @@ def parse_os_release() -> Dict[str, str]:
      'PRETTY_NAME': 'Ubuntu 18.04.3 LTS',
     }
 
-    VERSION_CODENAME (e.g. 'bionic') is nice and human-readable, but
-    we avoid using it, as it is not available on RHEL-based platforms.
+    VERSION_CODENAME (e.g. 'bionic') is nice and readable to Ubuntu
+    developers, but we avoid using it, as it is not available on
+    RHEL-based platforms.
     """
     distro_info = {}  # type: Dict[str, str]
     with open("/etc/os-release") as fp:
@@ -425,11 +426,6 @@ def parse_os_release() -> Dict[str, str]:
                 continue
             k, v = line.split("=", 1)
             [distro_info[k]] = shlex.split(v)
-    if distro_info["PRETTY_NAME"] == "Debian GNU/Linux bullseye/sid":
-        # This hack can be removed once bullseye releases and reports
-        # its VERSION_ID in /etc/os-release.
-        distro_info["VERSION_CODENAME"] = "bullseye"
-        distro_info["VERSION_ID"] = "11"
     return distro_info
 
 
@@ -580,6 +576,28 @@ def get_deploy_options(config_file: configparser.RawConfigParser) -> List[str]:
     return get_config(config_file, "deployment", "deploy_options", "").strip().split()
 
 
+def run_psql_as_postgres(
+    config_file: configparser.RawConfigParser,
+    sql_query: str,
+) -> None:
+    dbname = get_config(config_file, "postgresql", "database_name", "zulip")
+    subcmd = " ".join(
+        map(
+            shlex.quote,
+            [
+                "psql",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-d",
+                dbname,
+                "-c",
+                sql_query,
+            ],
+        )
+    )
+    subprocess.check_call(["su", "postgres", "-c", subcmd])
+
+
 def get_tornado_ports(config_file: configparser.RawConfigParser) -> List[int]:
     ports = []
     if config_file.has_section("tornado_sharding"):
@@ -597,6 +615,45 @@ def get_or_create_dev_uuid_var_path(path: str) -> str:
 
 def is_vagrant_env_host(path: str) -> bool:
     return ".vagrant" in os.listdir(path)
+
+
+def has_application_server(once: bool = False) -> bool:
+    if once:
+        return os.path.exists("/etc/supervisor/conf.d/zulip/zulip-once.conf")
+    return (
+        # Current path
+        os.path.exists("/etc/supervisor/conf.d/zulip/zulip.conf")
+        # Old path, relevant for upgrades
+        or os.path.exists("/etc/supervisor/conf.d/zulip.conf")
+    )
+
+
+def list_supervisor_processes(*args: str) -> List[str]:
+    worker_status = subprocess.run(
+        ["supervisorctl", "status", *args],
+        universal_newlines=True,
+        stdout=subprocess.PIPE,
+    )
+    # `supercisorctl status` returns 3 if any are stopped, which is
+    # fine here; and exit code 4 is for no such process, which is
+    # handled below.
+    if worker_status.returncode not in (0, 3, 4):
+        worker_status.check_returncode()
+
+    processes = []
+    for status_line in worker_status.stdout.splitlines():
+        if not re.search(r"ERROR \(no such (process|group)\)", status_line):
+            processes.append(status_line.split()[0])
+    return processes
+
+
+def has_process_fts_updates() -> bool:
+    return (
+        # Current path
+        os.path.exists("/etc/supervisor/conf.d/zulip/zulip_db.conf")
+        # Old path, relevant for upgrades
+        or os.path.exists("/etc/supervisor/conf.d/zulip_db.conf")
+    )
 
 
 def deport(netloc: str) -> str:

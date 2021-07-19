@@ -22,6 +22,7 @@ from zerver.lib.actions import (
     build_message_send_dict,
     check_add_realm_emoji,
     do_change_user_role,
+    do_create_realm,
     do_send_messages,
     do_update_user_custom_profile_data_if_changed,
     try_add_realm_custom_profile_field,
@@ -302,7 +303,7 @@ class Command(BaseCommand):
             # Could in theory be done via zerver.lib.actions.do_create_realm, but
             # welcome-bot (needed for do_create_realm) hasn't been created yet
             create_internal_realm()
-            zulip_realm = Realm.objects.create(
+            zulip_realm = do_create_realm(
                 string_id="zulip",
                 name="Zulip Dev",
                 emails_restricted_to_domains=False,
@@ -310,40 +311,33 @@ class Command(BaseCommand):
                 description="The Zulip development environment default organization."
                 "  It's great for testing!",
                 invite_required=False,
-                org_type=Realm.CORPORATE,
-            )
-            RealmAuditLog.objects.create(
-                realm=zulip_realm,
-                event_type=RealmAuditLog.REALM_CREATED,
-                event_time=zulip_realm.date_created,
+                plan_type=Realm.SELF_HOSTED,
+                org_type=Realm.ORG_TYPES["business"]["id"],
             )
             RealmDomain.objects.create(realm=zulip_realm, domain="zulip.com")
+            assert zulip_realm.notifications_stream is not None
+            zulip_realm.notifications_stream.name = "Verona"
+            zulip_realm.notifications_stream.description = "A city in Italy"
+            zulip_realm.notifications_stream.save(update_fields=["name", "description"])
+
             if options["test_suite"]:
-                mit_realm = Realm.objects.create(
+                mit_realm = do_create_realm(
                     string_id="zephyr",
                     name="MIT",
                     emails_restricted_to_domains=True,
                     invite_required=False,
-                    org_type=Realm.CORPORATE,
-                )
-                RealmAuditLog.objects.create(
-                    realm=mit_realm,
-                    event_type=RealmAuditLog.REALM_CREATED,
-                    event_time=mit_realm.date_created,
+                    plan_type=Realm.SELF_HOSTED,
+                    org_type=Realm.ORG_TYPES["business"]["id"],
                 )
                 RealmDomain.objects.create(realm=mit_realm, domain="mit.edu")
 
-                lear_realm = Realm.objects.create(
+                lear_realm = do_create_realm(
                     string_id="lear",
                     name="Lear & Co.",
                     emails_restricted_to_domains=False,
                     invite_required=False,
-                    org_type=Realm.CORPORATE,
-                )
-                RealmAuditLog.objects.create(
-                    realm=lear_realm,
-                    event_type=RealmAuditLog.REALM_CREATED,
-                    event_time=lear_realm.date_created,
+                    plan_type=Realm.SELF_HOSTED,
+                    org_type=Realm.ORG_TYPES["business"]["id"],
                 )
 
                 # Default to allowing all members to send mentions in
@@ -534,9 +528,17 @@ class Command(BaseCommand):
             create_if_missing_realm_internal_bots()
 
             # Create public streams.
-            stream_list = ["Verona", "Denmark", "Scotland", "Venice", "Rome"]
+            signups_stream = Realm.INITIAL_PRIVATE_STREAM_NAME
+
+            stream_list = [
+                "Verona",
+                "Denmark",
+                "Scotland",
+                "Venice",
+                "Rome",
+                signups_stream,
+            ]
             stream_dict: Dict[str, Dict[str, Any]] = {
-                "Verona": {"description": "A city in Italy"},
                 "Denmark": {"description": "A Scandinavian country"},
                 "Scotland": {"description": "Located in the United Kingdom"},
                 "Venice": {"description": "A northeastern Italian city"},
@@ -564,13 +566,23 @@ class Command(BaseCommand):
                 subscriptions_map = {
                     "AARON@zulip.com": ["Verona"],
                     "cordelia@zulip.com": ["Verona"],
-                    "hamlet@zulip.com": ["Verona", "Denmark"],
-                    "iago@zulip.com": ["Verona", "Denmark", "Scotland"],
+                    "hamlet@zulip.com": ["Verona", "Denmark", signups_stream],
+                    "iago@zulip.com": [
+                        "Verona",
+                        "Denmark",
+                        "Scotland",
+                        signups_stream,
+                    ],
                     "othello@zulip.com": ["Verona", "Denmark", "Scotland"],
                     "prospero@zulip.com": ["Verona", "Denmark", "Scotland", "Venice"],
                     "ZOE@zulip.com": ["Verona", "Denmark", "Scotland", "Venice", "Rome"],
                     "polonius@zulip.com": ["Verona"],
-                    "desdemona@zulip.com": ["Verona", "Denmark", "Venice"],
+                    "desdemona@zulip.com": [
+                        "Verona",
+                        "Denmark",
+                        "Venice",
+                        signups_stream,
+                    ],
                     "shiva@zulip.com": ["Verona", "Denmark", "Scotland"],
                 }
 
@@ -580,7 +592,7 @@ class Command(BaseCommand):
                         raise Exception(f"Subscriptions not listed for user {email}")
 
                     for stream_name in subscriptions_map[email]:
-                        stream = Stream.objects.get(name=stream_name)
+                        stream = Stream.objects.get(name=stream_name, realm=zulip_realm)
                         r = Recipient.objects.get(type=Recipient.STREAM, type_id=stream.id)
                         subscriptions_list.append((profile, r))
             else:
@@ -1038,7 +1050,7 @@ def send_messages(messages: List[Message]) -> None:
     settings.USING_RABBITMQ = False
     message_dict_list = []
     for message in messages:
-        message_dict = build_message_send_dict({"message": message})
+        message_dict = build_message_send_dict(message=message)
         message_dict_list.append(message_dict)
     do_send_messages(message_dict_list)
     bulk_create_reactions(messages)

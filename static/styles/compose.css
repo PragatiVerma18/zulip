@@ -24,14 +24,6 @@
         .message-control-link {
             float: left;
         }
-
-        .alert-draft {
-            font-size: 14px;
-            color: hsl(170, 48%, 54%);
-            padding: 0 12px;
-            font-weight: 400;
-            display: none;
-        }
     }
 
     .reply_button_container {
@@ -67,12 +59,15 @@
 }
 
 /* Main geometry for this element is in zulip.css */
-.compose-content {
+#compose-content {
     border-top: 1px solid hsla(0, 0%, 0%, 0.07);
     transition: background-color 200ms linear;
     padding: 4px 4px 8px 4px;
     border-left: 1px solid hsl(0, 0%, 93%);
     border-right: 1px solid hsl(0, 0%, 93%);
+    height: 100%;
+    display: flex;
+    flex-flow: column;
 }
 
 .ztable_comp_col1 {
@@ -93,6 +88,10 @@
 }
 
 .compose_table {
+    height: 100%;
+    display: flex;
+    flex-flow: column;
+
     .stream-selection-header-colorblock {
         &.message_header_private_message {
             border-radius: 3px 0 0 3px;
@@ -117,7 +116,7 @@
 
     .pm_recipient {
         margin-left: 5px;
-        margin-right: 20px;
+        margin-right: 35px;
         display: flex;
         width: 100%;
     }
@@ -155,6 +154,11 @@
 
 #send_message_form {
     margin: 0;
+    height: 100%;
+
+    .messagebox-wrapper {
+        flex: 1;
+    }
 
     .messagebox {
         /* normally 5px 14px; pull in the right and bottom a bit */
@@ -163,6 +167,9 @@
         background: none;
         box-shadow: none;
         border: none;
+        height: 100%;
+        display: flex;
+        flex-flow: column;
     }
 
     .message_content {
@@ -173,6 +180,20 @@
 #below-compose-content {
     width: 100%;
     margin-top: 6px;
+}
+
+#compose_limit_indicator {
+    position: relative;
+    margin-right: 8px;
+    top: 3px;
+    float: right;
+    font-size: 12px;
+    color: hsl(39, 100%, 50%);
+
+    &.over_limit {
+        color: hsl(0, 100%, 50%);
+        font-weight: bold;
+    }
 }
 
 #compose {
@@ -192,17 +213,31 @@
     margin: auto;
 }
 
-#compose_close {
-    display: none;
+#compose_top_right {
     position: absolute;
     right: 0;
-    opacity: 0.7;
+    float: right;
+
+    button {
+        background: transparent;
+        font-size: 20px;
+        font-weight: bold;
+        line-height: 20px;
+        opacity: 0.6;
+        border: 0;
+        padding: 0;
+        margin-left: 4px;
+        vertical-align: unset;
+
+        &:hover {
+            opacity: 1;
+        }
+    }
 }
 
-#compose_invite_users,
-#compose_private_stream_alert {
-    /* Don't overlap into the compose_close × */
-    margin-right: 10px;
+.collapse_composebox_button,
+#compose_close {
+    display: none;
 }
 
 .compose_invite_user,
@@ -262,13 +297,6 @@ div[id^="message-edit-send-status"],
     margin-bottom: 10px;
 }
 
-#nonexistent_stream_reply_error {
-    padding: 8px 14px 8px 14px;
-    margin-bottom: 8px;
-    line-height: 20px;
-    display: none;
-}
-
 /* Like .alert .close */
 .send-status-close,
 .compose-send-status-close {
@@ -313,6 +341,7 @@ div[id^="message-edit-send-status"],
 
 .composition-area {
     position: relative;
+    flex: 1;
 }
 
 textarea.new_message_textarea {
@@ -324,6 +353,24 @@ textarea.new_message_textarea {
     margin-bottom: 0;
     resize: vertical !important;
     margin-top: 5px;
+
+    @keyframes flash {
+        0% {
+            box-shadow: none;
+        }
+        100% {
+            box-shadow: 0 0 0 1pt hsl(0, 100%, 50%);
+        }
+    }
+
+    &.over_limit,
+    &.over_limit:focus {
+        box-shadow: 0 0 0 1pt hsl(0, 100%, 50%);
+
+        &.flash {
+            animation: flash 0.5s ease-in-out infinite;
+        }
+    }
 }
 
 textarea.new_message_textarea,
@@ -374,20 +421,12 @@ input.recipient_box {
        this element appears before its proper position in the DOM and is configured
        to float right, so that tabbing from the compose box goes here and then
        to the message controls to its left, to ensure "Tab then Enter" sends messages. */
-    border-radius: 4px;
     padding-top: 3px;
     padding-bottom: 3px;
     margin-bottom: 0;
     font-weight: 600;
-    border: 1px solid hsl(170, 68%, 41%);
-    background-color: hsl(170, 48%, 54%);
-    color: hsl(0, 0%, 100%);
     float: right;
     font-size: 0.9em;
-
-    &:focus {
-        box-shadow: 0 0 10px hsl(170, 48%, 54%), 0 0 5px hsl(170, 48%, 54%);
-    }
 }
 
 #send_controls {
@@ -426,7 +465,7 @@ input.recipient_box {
 
 a.compose_control_button {
     display: block;
-    opacity: 0.4;
+    opacity: 0.7;
     color: inherit;
     text-decoration: none;
     font-size: 15px;
@@ -473,27 +512,17 @@ a.compose_control_button.hide {
     /* minus 5px padding. */
     width: calc(100% - 12px);
     padding: 5px;
+    margin-top: 5px;
     /* the maximum height the textarea gets to. */
     max-height: 308px;
     /* the minimum height the textarea collapses to. */
-    min-height: 36px;
+    min-height: 42px;
     overflow: auto;
 
     border: 1px solid hsl(0, 0%, 67%);
     border-radius: 4px;
     background-color: hsla(0, 0%, 0%, 0.02);
     cursor: not-allowed;
-}
-
-#preview_message_area {
-    margin-top: 5px;
-    min-height: 42px;
-}
-
-a.undo_markdown_preview {
-    text-decoration: none;
-    position: relative;
-    font-size: 15px;
 }
 
 .markdown_preview_spinner {
@@ -533,13 +562,13 @@ a.undo_markdown_preview {
 
 /* This max-width must be synced with message_viewport.is_narrow */
 @media (width < $xl_min) {
-    .compose-content {
+    #compose-content {
         margin-right: 7px;
     }
 }
 
 @media (width < $md_min) {
-    .compose-content {
+    #compose-content {
         margin-right: 7px;
         margin-left: 7px;
     }
@@ -551,8 +580,29 @@ a.undo_markdown_preview {
         min-width: 95px;
     }
 
-    .compose-content {
+    #compose-content {
         margin-right: 5px;
         margin-left: 5px;
+    }
+}
+
+#compose.compose-fullscreen {
+    height: 100%;
+    z-index: 99;
+
+    #compose-container {
+        margin-top: 50px;
+        height: calc(100% - 50px);
+    }
+
+    .message_comp {
+        flex: 1;
+        display: flex !important;
+        flex-flow: column;
+    }
+
+    #compose-textarea {
+        max-height: none !important;
+        flex: 1;
     }
 }

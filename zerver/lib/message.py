@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import ahocorasick
 import orjson
+from django.conf import settings
 from django.db import connection
 from django.db.models import Max, Sum
 from django.utils.timezone import now as timezone_now
@@ -13,7 +14,8 @@ from django.utils.translation import gettext as _
 from psycopg2.sql import SQL
 from typing_extensions import TypedDict
 
-from analytics.lib.counts import COUNT_STATS, RealmCount
+from analytics.lib.counts import COUNT_STATS
+from analytics.models import RealmCount
 from zerver.lib.avatar import get_avatar_field
 from zerver.lib.cache import (
     cache_with_key,
@@ -21,23 +23,21 @@ from zerver.lib.cache import (
     to_dict_cache_key,
     to_dict_cache_key_id,
 )
-from zerver.lib.display_recipient import (
-    DisplayRecipientT,
-    UserDisplayRecipient,
-    bulk_fetch_display_recipients,
-)
-from zerver.lib.markdown import MentionData, markdown_convert, topic_links
+from zerver.lib.display_recipient import bulk_fetch_display_recipients
+from zerver.lib.exceptions import JsonableError
+from zerver.lib.markdown import MessageRenderingResult, markdown_convert, topic_links
 from zerver.lib.markdown import version as markdown_version
-from zerver.lib.request import JsonableError
+from zerver.lib.mention import MentionData
 from zerver.lib.stream_subscription import (
     get_stream_subscriptions_for_user,
+    get_subscribed_stream_recipient_ids_for_user,
     num_subscribers_for_stream_id,
 )
 from zerver.lib.timestamp import datetime_to_timestamp
 from zerver.lib.topic import DB_TOPIC_NAME, MESSAGE__TOPIC, TOPIC_LINKS, TOPIC_NAME
 from zerver.lib.topic_mutes import build_topic_mute_checker, topic_is_muted
+from zerver.lib.types import DisplayRecipientT, UserDisplayRecipient
 from zerver.models import (
-    MAX_MESSAGE_LENGTH,
     MAX_TOPIC_NAME_LENGTH,
     Message,
     Reaction,
@@ -66,10 +66,24 @@ class RawReactionRow(TypedDict):
     user_profile_id: int
 
 
+class RawUnreadStreamDict(TypedDict):
+    stream_id: int
+    topic: str
+    sender_id: int
+
+
+class RawUnreadPrivateMessageDict(TypedDict):
+    sender_id: int
+
+
+class RawUnreadHuddleDict(TypedDict):
+    user_ids_string: str
+
+
 class RawUnreadMessagesResult(TypedDict):
-    pm_dict: Dict[int, Any]
-    stream_dict: Dict[int, Any]
-    huddle_dict: Dict[int, Any]
+    pm_dict: Dict[int, RawUnreadPrivateMessageDict]
+    stream_dict: Dict[int, RawUnreadStreamDict]
+    huddle_dict: Dict[int, RawUnreadHuddleDict]
     mentions: Set[int]
     muted_stream_ids: List[int]
     unmuted_stream_msgs: Set[int]
@@ -88,15 +102,18 @@ class UnreadMessagesResult(TypedDict):
 @dataclass
 class SendMessageRequest:
     message: Message
+    rendering_result: MessageRenderingResult
     stream: Optional[Stream]
-    local_id: Optional[int]
-    sender_queue_id: Optional[int]
+    local_id: Optional[str]
+    sender_queue_id: Optional[str]
     realm: Realm
     mention_data: MentionData
+    mentioned_user_groups_map: Dict[int, int]
     active_user_ids: Set[int]
-    push_notify_user_ids: Set[int]
+    online_push_user_ids: Set[int]
     stream_push_user_ids: Set[int]
     stream_email_user_ids: Set[int]
+    muted_sender_user_ids: Set[int]
     um_eligible_user_ids: Set[int]
     long_term_idle_user_ids: Set[int]
     default_bot_user_ids: Set[int]
@@ -123,12 +140,12 @@ def truncate_content(content: str, max_length: int, truncation_message: str) -> 
 
 
 def normalize_body(body: str) -> str:
-    body = body.rstrip()
+    body = body.rstrip().lstrip("\n")
     if len(body) == 0:
         raise JsonableError(_("Message must not be empty"))
     if "\x00" in body:
         raise JsonableError(_("Message must not contain null bytes"))
-    return truncate_content(body, MAX_MESSAGE_LENGTH, "\n[message truncated]")
+    return truncate_content(body, settings.MAX_MESSAGE_LENGTH, "\n[message truncated]")
 
 
 def truncate_topic(topic: str) -> str:
@@ -224,7 +241,10 @@ def message_to_dict_json(message: Message, realm_id: Optional[int] = None) -> by
 
 
 def save_message_rendered_content(message: Message, content: str) -> str:
-    rendered_content = render_markdown(message, content, realm=message.get_realm())
+    rendering_result = render_markdown(message, content, realm=message.get_realm())
+    rendered_content = None
+    if rendering_result is not None:
+        rendered_content = rendering_result.rendered_content
     message.rendered_content = rendered_content
     message.rendered_content_version = markdown_version
     message.save_rendered_content()
@@ -654,7 +674,9 @@ class ReactionDict:
 
 
 def access_message(
-    user_profile: UserProfile, message_id: int
+    user_profile: UserProfile,
+    message_id: int,
+    lock_message: bool = False,
 ) -> Tuple[Message, Optional[UserMessage]]:
     """You can access a message by ID in our APIs that either:
     (1) You received or have previously accessed via starring
@@ -663,67 +685,115 @@ def access_message(
 
     We produce consistent, boring error messages to avoid leaking any
     information from a security perspective.
+
+    The lock_message parameter should be passed by callers that are
+    planning to modify the Message object. This will use the SQL
+    `SELECT FOR UPDATE` feature to ensure that other processes cannot
+    delete the message during the current transaction, which is
+    important to prevent rare race conditions. Callers must only
+    pass lock_message when inside a @transaction.atomic block.
     """
     try:
-        message = Message.objects.select_related().get(id=message_id)
+        base_query = Message.objects.select_related()
+        if lock_message:
+            # We want to lock only the `Message` row, and not the related fields
+            # because the `Message` row only has a possibility of races.
+            base_query = base_query.select_for_update(of=("self",))
+        message = base_query.get(id=message_id)
     except Message.DoesNotExist:
         raise JsonableError(_("Invalid message(s)"))
 
     user_message = get_usermessage_by_message_id(user_profile, message_id)
 
-    if has_message_access(user_profile, message, user_message):
+    if has_message_access(user_profile, message, has_user_message=user_message is not None):
         return (message, user_message)
     raise JsonableError(_("Invalid message(s)"))
 
 
 def has_message_access(
-    user_profile: UserProfile, message: Message, user_message: Optional[UserMessage]
+    user_profile: UserProfile,
+    message: Message,
+    *,
+    has_user_message: bool,
+    stream: Optional[Stream] = None,
+    is_subscribed: Optional[bool] = None,
 ) -> bool:
-    if user_message is None:
-        if message.recipient.type != Recipient.STREAM:
-            # You can't access private messages you didn't receive
-            return False
+    """
+    Returns whether a user has access to a given message.
 
+    * The user_message parameter must be provided if the user has a UserMessage
+      row for the target message.
+    * The optional stream parameter is validated; is_subscribed is not.
+    """
+
+    # If you have a user_message object, you have access.
+    if has_user_message:
+        return True
+
+    if message.recipient.type != Recipient.STREAM:
+        # You can't access private messages you didn't receive
+        return False
+
+    if stream is None:
         stream = Stream.objects.get(id=message.recipient.type_id)
-        if stream.realm != user_profile.realm:
-            # You can't access public stream messages in other realms
-            return False
+    else:
+        assert stream.recipient_id == message.recipient_id
 
-        if not stream.is_history_public_to_subscribers():
-            # You can't access messages you didn't directly receive
-            # unless history is public to subscribers.
-            return False
+    if stream.realm != user_profile.realm:
+        # You can't access public stream messages in other realms
+        return False
 
-        if not stream.is_public():
-            # This stream is an invite-only stream where message
-            # history is available to subscribers.  So we check if
-            # you're subscribed.
-            if not Subscription.objects.filter(
-                user_profile=user_profile, active=True, recipient=message.recipient
-            ).exists():
-                return False
+    if not stream.is_history_public_to_subscribers():
+        # You can't access messages you didn't directly receive
+        # unless history is public to subscribers.
+        return False
 
-            # You are subscribed, so let this fall through to the public stream case.
-        elif user_profile.is_guest:
-            # Guest users don't get automatic access to public stream messages
-            if not Subscription.objects.filter(
-                user_profile=user_profile, active=True, recipient=message.recipient
-            ).exists():
-                return False
-        else:
-            # Otherwise, the message was sent to a public stream in
-            # your realm, so return the message, user_message pair
-            pass
+    if stream.is_public() and user_profile.can_access_public_streams():
+        return True
 
-    return True
+    # is_history_public_to_subscribers, so check if you're subscribed
+    if is_subscribed is not None:
+        return is_subscribed
+
+    return Subscription.objects.filter(
+        user_profile=user_profile, active=True, recipient=message.recipient
+    ).exists()
 
 
-def bulk_access_messages(user_profile: UserProfile, messages: Sequence[Message]) -> List[Message]:
+def bulk_access_messages(
+    user_profile: UserProfile, messages: Sequence[Message], *, stream: Optional[Stream] = None
+) -> List[Message]:
+    """This function does the full has_message_access check for each
+    message.  If stream is provided, it is used to avoid unnecessary
+    database queries, and will use exactly 2 bulk queries instead.
+
+    Throws AssertionError if stream is passed and any of the messages
+    were not sent to that stream.
+
+    """
     filtered_messages = []
 
+    user_message_set = set(
+        bulk_access_messages_expect_usermessage(
+            user_profile.id, [message.id for message in messages]
+        )
+    )
+
+    # TODO: Ideally, we'd do a similar bulk-stream-fetch if stream is
+    # None, so that this function is fast with
+
+    subscribed_recipient_ids = set(get_subscribed_stream_recipient_ids_for_user(user_profile))
+
     for message in messages:
-        user_message = get_usermessage_by_message_id(user_profile, message.id)
-        if has_message_access(user_profile, message, user_message):
+        has_user_message = message.id in user_message_set
+        is_subscribed = message.recipient_id in subscribed_recipient_ids
+        if has_message_access(
+            user_profile,
+            message,
+            has_user_message=has_user_message,
+            stream=stream,
+            is_subscribed=is_subscribed,
+        ):
             filtered_messages.append(message)
     return filtered_messages
 
@@ -757,7 +827,7 @@ def render_markdown(
     realm_alert_words_automaton: Optional[ahocorasick.Automaton] = None,
     mention_data: Optional[MentionData] = None,
     email_gateway: bool = False,
-) -> str:
+) -> MessageRenderingResult:
     """
     This is basically just a wrapper for do_render_markdown.
     """
@@ -769,45 +839,7 @@ def render_markdown(
     sent_by_bot = sender.is_bot
     translate_emoticons = sender.translate_emoticons
 
-    rendered_content = do_render_markdown(
-        message=message,
-        content=content,
-        realm=realm,
-        realm_alert_words_automaton=realm_alert_words_automaton,
-        sent_by_bot=sent_by_bot,
-        translate_emoticons=translate_emoticons,
-        mention_data=mention_data,
-        email_gateway=email_gateway,
-    )
-
-    return rendered_content
-
-
-def do_render_markdown(
-    message: Message,
-    content: str,
-    realm: Realm,
-    sent_by_bot: bool,
-    translate_emoticons: bool,
-    realm_alert_words_automaton: Optional[ahocorasick.Automaton] = None,
-    mention_data: Optional[MentionData] = None,
-    email_gateway: bool = False,
-) -> str:
-    """Return HTML for given Markdown. Markdown may add properties to the
-    message object such as `mentions_user_ids`, `mentions_user_group_ids`, and
-    `mentions_wildcard`.  These are only on this Django object and are not
-    saved in the database.
-    """
-
-    message.mentions_wildcard = False
-    message.mentions_user_ids = set()
-    message.mentions_user_group_ids = set()
-    message.alert_words = set()
-    message.links_for_preview = set()
-    message.user_ids_with_alert_words = set()
-
-    # DO MAIN WORK HERE -- call markdown_convert to convert
-    rendered_content = markdown_convert(
+    rendering_result = markdown_convert(
         content,
         realm_alert_words_automaton=realm_alert_words_automaton,
         message=message,
@@ -817,7 +849,8 @@ def do_render_markdown(
         mention_data=mention_data,
         email_gateway=email_gateway,
     )
-    return rendered_content
+
+    return rendering_result
 
 
 def huddle_users(recipient_id: int) -> str:
@@ -836,7 +869,7 @@ def huddle_users(recipient_id: int) -> str:
 
 
 def aggregate_message_dict(
-    input_dict: Dict[int, Dict[str, Any]], lookup_fields: List[str], collect_senders: bool
+    input_dict: Dict[int, Any], lookup_fields: List[str], collect_senders: bool
 ) -> List[Dict[str, Any]]:
     lookup_dict: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 
@@ -978,10 +1011,10 @@ def extract_unread_data_from_um_rows(
     rows: List[Dict[str, Any]], user_profile: Optional[UserProfile]
 ) -> RawUnreadMessagesResult:
 
-    pm_dict: Dict[int, Any] = {}
-    stream_dict: Dict[int, Any] = {}
+    pm_dict: Dict[int, RawUnreadPrivateMessageDict] = {}
+    stream_dict: Dict[int, RawUnreadStreamDict] = {}
     unmuted_stream_msgs: Set[int] = set()
-    huddle_dict: Dict[int, Any] = {}
+    huddle_dict: Dict[int, RawUnreadHuddleDict] = {}
     mentions: Set[int] = set()
     total_unreads = 0
 
@@ -1157,12 +1190,11 @@ def apply_unread_message_event(
     if message_type == "stream":
         stream_id = message["stream_id"]
         topic = message[TOPIC_NAME]
-        new_row = dict(
+        state["stream_dict"][message_id] = RawUnreadStreamDict(
             stream_id=stream_id,
             topic=topic,
             sender_id=sender_id,
         )
-        state["stream_dict"][message_id] = new_row
 
         if stream_id not in state["muted_stream_ids"]:
             # This next check hits the database.
@@ -1176,20 +1208,19 @@ def apply_unread_message_event(
             other_id = user_profile.id
 
         # The `sender_id` field here is misnamed.
-        new_row = dict(
+        state["pm_dict"][message_id] = RawUnreadPrivateMessageDict(
             sender_id=other_id,
         )
-        state["pm_dict"][message_id] = new_row
 
     else:
         display_recipient = message["display_recipient"]
         user_ids = [obj["id"] for obj in display_recipient]
         user_ids = sorted(user_ids)
         user_ids_string = ",".join(str(uid) for uid in user_ids)
-        new_row = dict(
+
+        state["huddle_dict"][message_id] = RawUnreadHuddleDict(
             user_ids_string=user_ids_string,
         )
-        state["huddle_dict"][message_id] = new_row
 
     if "mentioned" in flags:
         state["mentions"].add(message_id)

@@ -1,5 +1,6 @@
 from typing import Any
 
+import orjson
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.template.defaultfilters import pluralize, slugify
 from django.urls import reverse
@@ -9,7 +10,11 @@ from jinja2 import Environment
 from two_factor.templatetags.two_factor import device_action
 
 from zerver.context_processors import DEFAULT_PAGE_PARAMS
-from zerver.templatetags.app_filters import display_list, render_markdown_path, webpack_entry
+from zerver.lib.templates import display_list, render_markdown_path, webpack_entry
+
+
+def json_dumps(obj: object) -> str:
+    return orjson.dumps(obj).decode()
 
 
 def environment(**options: Any) -> Environment:
@@ -25,12 +30,15 @@ def environment(**options: Any) -> Environment:
         webpack_entry=webpack_entry,
     )
 
-    env.install_gettext_translations(translation, True)
+    env.install_gettext_translations(translation, True)  # type: ignore[attr-defined] # Added by jinja2.ext.i18n
 
     env.filters["slugify"] = slugify
     env.filters["pluralize"] = pluralize
     env.filters["display_list"] = display_list
     env.filters["device_action"] = device_action
     env.filters["timesince"] = timesince
+
+    env.policies["json.dumps_function"] = json_dumps
+    env.policies["json.dumps_kwargs"] = {}
 
     return env

@@ -202,8 +202,6 @@ corresponding LDAP attribute is `linkedinProfile` then you just need
 to add `'custom_profile_field__linkedin_profile': 'linkedinProfile'`
 to the `AUTH_LDAP_USER_ATTR_MAP`.
 
-[custom-profile-fields]: https://zulip.com/help/add-custom-profile-fields
-
 #### Automatically deactivating users with Active Directory
 
 Starting with Zulip 2.0, Zulip supports synchronizing the
@@ -252,9 +250,6 @@ Other fields you may want to sync from LDAP include:
   automatic deactivation for how to do that properly).
 * String fields like `default_language` (e.g. `en`) or `timezone`, if
   you have that data in the right format in your LDAP database.
-* [Coming soon][custom-profile-fields-ldap]: Support for syncing
-  [custom profile fields](https://zulip.com/help/add-custom-profile-fields)
-  from your LDAP database.
 
 You can look at the [full list of fields][models-py] in the Zulip user
 model; search for `class UserProfile`, but the above should cover all
@@ -262,7 +257,6 @@ the fields that would be useful to sync from your LDAP databases.
 
 [models-py]: https://github.com/zulip/zulip/blob/master/zerver/models.py
 [django-auth-booleans]: https://django-auth-ldap.readthedocs.io/en/latest/users.html#easy-attributes
-[custom-profile-fields-ldap]: https://github.com/zulip/zulip/issues/10976
 
 ### Multiple LDAP searches
 
@@ -379,7 +373,7 @@ it as follows:
       if `SOCIAL_AUTH_SUBDOMAIN="auth"` and `EXTERNAL_HOST=zulip.example.com`,
       this should be `https://auth.zulip.example.com/complete/saml/`.
 
-2. Tell Zulip how to connect to your SAML provider(s) by filling
+1. Tell Zulip how to connect to your SAML provider(s) by filling
    out the section of `/etc/zulip/settings.py` on your Zulip server
    with the heading "SAML Authentication".
    * You will need to update `SOCIAL_AUTH_SAML_ORG_INFO` with your
@@ -406,8 +400,10 @@ it as follows:
         user ID) and name for the user.
      5. The `display_name` and `display_icon` fields are used to
         display the login/registration buttons for the IdP.
+     6. The `auto_signup` field determines how Zulip should handle
+        login attempts by users who don't have an account yet.
 
-3. Install the certificate(s) required for SAML authentication.  You
+1. Install the certificate(s) required for SAML authentication.  You
     will definitely need the public certificate of your IdP.  Some IdP
     providers also support the Zulip server (Service Provider) having
     a certificate used for encryption and signing.  We detail these
@@ -420,7 +416,12 @@ it as follows:
     3. (Optional) Put the Zulip server public certificate in `/etc/zulip/saml/zulip-cert.crt`
        and the corresponding private key in `/etc/zulip/saml/zulip-private-key.key`. Note that
        the certificate should be the single X.509 certificate for the server, not a full chain of
-       trust, which consists of multiple certificates.
+       trust, which consists of multiple certificates. The private key cannot be encrypted
+       with a password, as then Zulip will not be able to load it. An example pair can be
+       generated using:
+       ```
+       openssl req -x509 -newkey rsa:2056 -keyout zulip-private-key.key -out zulip-cert.crt -days 365 -nodes
+       ```
     4. Set the proper permissions on these files and directories:
 
     ```
@@ -429,7 +430,7 @@ it as follows:
     chmod 640 /etc/zulip/saml/zulip-private-key.key
     ```
 
-4. (Optional) If you configured the optional public and private server
+1. (Optional) If you configured the optional public and private server
    certificates above, you can enable the additional setting
    `"authnRequestsSigned": True` in `SOCIAL_AUTH_SAML_SECURITY_CONFIG`
    to have the SAMLRequests the server will be issuing to the IdP
@@ -438,15 +439,34 @@ it as follows:
    assertions in the SAMLResponses the IdP will send about
    authenticated users.
 
-5. Enable the `zproject.backends.SAMLAuthBackend` auth backend, in
+1. Enable the `zproject.backends.SAMLAuthBackend` auth backend, in
 `AUTHENTICATION_BACKENDS` in `/etc/zulip/settings.py`.
 
-6. [Restart the Zulip server](../production/settings.md) to ensure
+1. (Optional) New in Zulip 5.0: Zulip can synchronize [custom profile
+   fields][custom-profile-fields] from the SAML provider. Just
+   configure the `SOCIAL_AUTH_SYNC_CUSTOM_ATTRS_DICT`; the
+   [LDAP](#synchronizing-custom-profile-fields) documentation for
+   synchronizing custom profile fields will be helpful. Servers
+   installed before Zulip 5.0 may want to [update inline comment
+   documentation][update-inline-comments] so they can take advantage
+   of the latest inline SAML documentation in
+   `/etc/zulip/settings.py`.
+
+   Note that in contrast with LDAP, Zulip can only query the SAML
+   database for a user's settings when the user authenticates to Zulip
+   using SAML, so custom profile fields are only synchronized when the
+   user logs in.
+
+   Note also that the SAML feature currently only synchronizes custom
+   profile fields during login, not during account creation; we
+   consider this [a bug](https://github.com/zulip/zulip/issues/18746).
+
+1. [Restart the Zulip server](../production/settings.md) to ensure
 your settings changes take effect.  The Zulip login page should now
 have a button for SAML authentication that you can use to log in or
 create an account (including when creating a new organization).
 
-7. If the configuration was successful, the server's metadata can be
+1. If the configuration was successful, the server's metadata can be
 found at `https://yourzulipdomain.example.com/saml/metadata.xml`. You
 can use this for verifying your configuration or provide it to your
 IdP.
@@ -456,7 +476,7 @@ IdP.
 ### IdP-initiated SSO
 
 The above configuration is sufficient for Service Provider initialized
-SSO, i.e. you can visit the Zulip webapp and click "Sign in with
+SSO, i.e. you can visit the Zulip web app and click "Sign in with
 {IdP}" and it'll correctly start the authentication flow.  If you are
 not hosting multiple organizations, with Zulip 3.0+, the above
 configuration is also sufficient for Identity Provider initiated SSO,
@@ -669,6 +689,19 @@ domain for your server).
 [apple-get-started]: https://developer.apple.com/sign-in-with-apple/get-started/
 [outgoing-email]: ../production/email.md
 
+## OpenID Connect
+
+Starting with Zulip 5.0, Zulip can be integrated with any OpenID
+Connect (OIDC) authentication provider.  You can configure it by
+enabling `zproject.backends.GenericOpenIdConnectBackend` in
+`AUTHENTICATION_BACKENDS` and following the steps outlined in the
+comment documentation in `/etc/zulip/settings.py`.
+
+Note that `SOCIAL_AUTH_OIDC_ENABLED_IDPS` only supports a single backend
+
+The Return URL to authorize with the provider is
+`https://yourzulipdomain.example.com/complete/oidc/`.
+
 ## Adding more authentication backends
 
 Adding an integration with any of the more than 100 authentication
@@ -691,3 +724,6 @@ helpful developer documentation on
 The `DevAuthBackend` method is used only in development, to allow
 passwordless login as any user in a development environment.  It's
 mentioned on this page only for completeness.
+
+[custom-profile-fields]: https://zulip.com/help/add-custom-profile-fields
+[update-inline-comments]: ../production/upgrade-or-modify.html#updating-settings-py-inline-documentation

@@ -102,8 +102,8 @@ function update_categories() {
 const update_integrations = _.debounce(() => {
     const max_scrollY = window.scrollY;
 
-    for (const integration of $(".integration-lozenges").children()) {
-        const $integration = $(integration).find(".integration-lozenge");
+    for (const integration of $(".integration-lozenges").find(".integration-lozenge")) {
+        const $integration = $(integration);
         const $integration_category = $integration.find(".integration-category");
 
         if (state.category !== "all") {
@@ -303,7 +303,7 @@ function toggle_categories_dropdown() {
 
 function integration_events() {
     $('#integration-search input[type="text"]').on("keypress", (e) => {
-        if (e.which === 13 && e.target.value !== "") {
+        if (e.key === "Enter" && e.target.value !== "") {
             for (const integration_element of $(".integration-lozenges").children()) {
                 const integration = $(integration_element).find(".integration-lozenge");
 

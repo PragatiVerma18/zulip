@@ -2,7 +2,7 @@ import * as blueslip from "./blueslip";
 import * as compose_fade_users from "./compose_fade_users";
 import * as hash_util from "./hash_util";
 import {$t} from "./i18n";
-import * as muting from "./muting";
+import * as muted_users from "./muted_users";
 import {page_params} from "./page_params";
 import * as people from "./people";
 import * as presence from "./presence";
@@ -145,22 +145,31 @@ export function user_last_seen_time_status(user_id) {
         return $t({defaultMessage: "Active now"});
     }
 
-    if (page_params.realm_is_zephyr_mirror_realm) {
-        // We don't send presence data to clients in Zephyr mirroring realms
-        return $t({defaultMessage: "Unknown"});
+    if (status === "idle") {
+        // When we complete our presence API rewrite to have the data
+        // plumbed, we may want to change this to also mention when
+        // they were last active.
+        return $t({defaultMessage: "Idle"});
     }
 
-    // There are situations where the client has incomplete presence
-    // history on a user.  This can happen when users are deactivated,
-    // or when they just haven't been present in a long time (and we
-    // may have queries on presence that go back only N weeks).
-    //
-    // We give the somewhat vague status of "Unknown" for these users.
     const last_active_date = presence.last_active_date(user_id);
-    if (last_active_date === undefined) {
-        return $t({defaultMessage: "More than 2 weeks ago"});
+    let last_seen;
+    if (page_params.realm_is_zephyr_mirror_realm) {
+        // We don't send presence data to clients in Zephyr mirroring realms
+        last_seen = $t({defaultMessage: "Unknown"});
+    } else if (last_active_date === undefined) {
+        // There are situations where the client has incomplete presence
+        // history on a user.  This can happen when users are deactivated,
+        // or when they just haven't been present in a long time (and we
+        // may have queries on presence that go back only N weeks).
+        //
+        // We give this vague status for such users; we will get to
+        // delete this code when we finish rewriting the presence API.
+        last_seen = $t({defaultMessage: "More than 2 weeks ago"});
+    } else {
+        last_seen = timerender.last_seen_status_from_date(last_active_date);
     }
-    return timerender.last_seen_status_from_date(last_active_date);
+    return $t({defaultMessage: "Last active: {last_seen}"}, {last_seen});
 }
 
 export function info_for(user_id) {
@@ -179,15 +188,6 @@ export function info_for(user_id) {
         user_circle_class,
         user_circle_status,
     };
-}
-
-function get_last_seen(active_status, last_seen) {
-    if (active_status === "active") {
-        return last_seen;
-    }
-
-    const last_seen_text = $t({defaultMessage: "Last active: {last_seen}"}, {last_seen});
-    return last_seen_text;
 }
 
 export function get_title_data(user_ids_string, is_group) {
@@ -230,7 +230,6 @@ export function get_title_data(user_ids_string, is_group) {
 
     // For buddy list and individual PMS.  Since is_group=False, it's
     // a single, human, user.
-    const active_status = presence.get_status(user_id);
     const last_seen = user_last_seen_time_status(user_id);
     const is_my_user = people.is_my_user_id(user_id);
 
@@ -239,7 +238,7 @@ export function get_title_data(user_ids_string, is_group) {
         return {
             first_line: person.full_name,
             second_line: user_status.get_status_text(user_id),
-            third_line: get_last_seen(active_status, last_seen),
+            third_line: last_seen,
             show_you: is_my_user,
         };
     }
@@ -247,7 +246,7 @@ export function get_title_data(user_ids_string, is_group) {
     // Users does not have a status.
     return {
         first_line: person.full_name,
-        second_line: get_last_seen(active_status, last_seen),
+        second_line: last_seen,
         third_line: "",
         show_you: is_my_user,
     };
@@ -327,7 +326,7 @@ function filter_user_ids(user_filter_text, user_ids) {
             return false;
         }
 
-        if (muting.is_user_muted(user_id)) {
+        if (muted_users.is_user_muted(user_id)) {
             // Muted users are hidden from the right sidebar entirely.
             return false;
         }
@@ -339,7 +338,7 @@ function filter_user_ids(user_filter_text, user_ids) {
         return user_ids;
     }
 
-    // If a query is present in "Filter users", we return matches.
+    // If a query is present in "Search people", we return matches.
     user_ids = user_ids.filter((user_id) => !people.is_my_user_id(user_id));
 
     let search_terms = user_filter_text.toLowerCase().split(/[,|]+/);
@@ -364,6 +363,12 @@ function get_filtered_user_id_list(user_filter_text) {
         // users who have been idle more than three weeks.  When the
         // filter text is blank, we show only those recently active users.
         base_user_id_list = presence.get_user_ids();
+
+        // Always include ourselves, even if we're "unavailable".
+        const my_user_id = people.my_current_user_id();
+        if (!base_user_id_list.includes(my_user_id)) {
+            base_user_id_list = [my_user_id, ...base_user_id_list];
+        }
     }
 
     const user_ids = filter_user_ids(user_filter_text, base_user_id_list);

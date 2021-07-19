@@ -15,11 +15,7 @@ sys.path.append(ZULIP_PATH)
 from typing import TYPE_CHECKING, List
 
 from scripts.lib.node_cache import NODE_MODULES_CACHE_PATH, setup_node_modules
-from scripts.lib.setup_venv import (
-    THUMBOR_VENV_DEPENDENCIES,
-    YUM_THUMBOR_VENV_DEPENDENCIES,
-    get_venv_dependencies,
-)
+from scripts.lib.setup_venv import get_venv_dependencies
 from scripts.lib.zulip_tools import (
     ENDC,
     FAIL,
@@ -126,8 +122,8 @@ COMMON_DEPENDENCIES = [
     "rabbitmq-server",
     "supervisor",
     "git",
-    "wget",
-    "ca-certificates",  # Explicit dependency in case e.g. wget is already installed
+    "curl",
+    "ca-certificates",  # Explicit dependency in case e.g. curl is already installed
     "puppet",  # Used by lint (`puppet parser validate`)
     "gettext",  # Used by makemessages i18n
     "transifex-client",  # Needed to sync translations from transifex
@@ -159,7 +155,6 @@ UBUNTU_COMMON_APT_DEPENDENCIES = [
     "libxss1",
     "xvfb",
     # Puppeteer dependencies end here.
-    *THUMBOR_VENV_DEPENDENCIES,
 ]
 
 COMMON_YUM_DEPENDENCIES = [
@@ -179,7 +174,6 @@ COMMON_YUM_DEPENDENCIES = [
     "mesa-libgbm",
     "xorg-x11-server-Xvfb",
     # Puppeteer dependencies end here.
-    *YUM_THUMBOR_VENV_DEPENDENCIES,
 ]
 
 BUILD_PGROONGA_FROM_SOURCE = False
@@ -205,9 +199,15 @@ elif "debian" in os_families():
     # additional dependency for postgresql-13-pgdg-pgroonga.
     #
     # See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=895037
-    if distro_info["VERSION_CODENAME"] == "bullseye":
+    if vendor == "debian" and os_version == "11":
         DEBIAN_DEPENDECIES.remove("libappindicator1")
         DEBIAN_DEPENDECIES.append("libgroonga0")
+
+    # If we are on an aarch64 processor, ninja will be built from source,
+    # so cmake is required
+    if platform.machine() == "aarch64":
+        DEBIAN_DEPENDECIES.append("cmake")
+
     SYSTEM_DEPENDENCIES = [
         *DEBIAN_DEPENDECIES,
         f"postgresql-{POSTGRESQL_VERSION}",
@@ -419,6 +419,7 @@ def main(options: argparse.Namespace) -> "NoReturn":
         "no_proxy=" + os.environ.get("no_proxy", ""),
     ]
     run_as_root([*proxy_env, "scripts/lib/install-node"], sudo_args=["-H"])
+    run_as_root([*proxy_env, "scripts/lib/install-yarn"])
 
     if not os.access(NODE_MODULES_CACHE_PATH, os.W_OK):
         run_as_root(["mkdir", "-p", NODE_MODULES_CACHE_PATH])

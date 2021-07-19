@@ -17,7 +17,7 @@ class RealmFilterTest(ZulipTestCase):
         result = self.client_get("/json/realm/linkifiers")
         self.assert_json_success(result)
         linkifiers = result.json()["linkifiers"]
-        self.assertEqual(len(linkifiers), 1)
+        self.assert_length(linkifiers, 1)
         self.assertEqual(linkifiers[0]["pattern"], "#(?P<id>[123])")
         self.assertEqual(linkifiers[0]["url_format"], "https://realm.com/my_realm_filter/%(id)s")
 
@@ -94,6 +94,41 @@ class RealmFilterTest(ZulipTestCase):
         self.assert_json_success(result)
         self.assertIsNotNone(re.match(data["pattern"], "!123"))
 
+        # This block of tests is for mismatches between field sets
+        data["pattern"] = r"ZUL-(?P<id>\d+)"
+        data["url_format_string"] = r"https://realm.com/my_realm_filter/%(hello)s"
+        result = self.client_post("/json/realm/filters", info=data)
+        self.assert_json_error(
+            result, "Group 'hello' in URL format string is not present in linkifier pattern."
+        )
+
+        data["pattern"] = r"ZUL-(?P<id>\d+)-(?P<hello>\d+)"
+        data["url_format_string"] = r"https://realm.com/my_realm_filter/%(hello)s"
+        result = self.client_post("/json/realm/filters", info=data)
+        self.assert_json_error(
+            result, "Group 'id' in linkifier pattern is not present in URL format string."
+        )
+
+        data["pattern"] = r"ZULZ-(?P<hello>\d+)-(?P<world>\d+)"
+        data["url_format_string"] = r"https://realm.com/my_realm_filter/%(hello)s/%(world)s"
+        result = self.client_post("/json/realm/filters", info=data)
+        self.assert_json_success(result)
+
+        data["pattern"] = r"ZUL-(?P<id>\d+)-(?P<hello>\d+)-(?P<world>\d+)"
+        data["url_format_string"] = r"https://realm.com/my_realm_filter/%(hello)s"
+        result = self.client_post("/json/realm/filters", info=data)
+        self.assert_json_error(
+            result, "Group 'id' in linkifier pattern is not present in URL format string."
+        )
+
+        # BUG: In theory, this should be valid, since %% should be a
+        # valid escaping method. It's unlikely someone actually wants
+        # to do this, though.
+        data["pattern"] = r"ZUL-(?P<id>\d+)"
+        data["url_format_string"] = r"https://realm.com/my_realm_filter/%%(ignored)s/%(id)s"
+        result = self.client_post("/json/realm/filters", info=data)
+        self.assert_json_error(result, "Invalid URL format string.")
+
         data["pattern"] = r"(?P<org>[a-zA-Z0-9_-]+)/(?P<repo>[a-zA-Z0-9_-]+)#(?P<id>[0-9]+)"
         data["url_format_string"] = "https://github.com/%(org)s/%(repo)s/issue/%(id)s"
         result = self.client_post("/json/realm/filters", info=data)
@@ -147,7 +182,7 @@ class RealmFilterTest(ZulipTestCase):
         result = self.client_get("/json/realm/linkifiers")
         self.assert_json_success(result)
         linkifier = result.json()["linkifiers"]
-        self.assertEqual(len(linkifier), 1)
+        self.assert_length(linkifier, 1)
         self.assertEqual(linkifier[0]["pattern"], "#(?P<id>[0-9]+)")
         self.assertEqual(
             linkifier[0]["url_format"], "https://realm.com/my_realm_filter/issues/%(id)s"

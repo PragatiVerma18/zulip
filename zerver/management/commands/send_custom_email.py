@@ -1,7 +1,10 @@
 from argparse import ArgumentParser
 from typing import Any
 
-from zerver.lib.management import CommandError, ZulipBaseCommand
+from django.conf import settings
+from django.core.management.base import CommandError
+
+from zerver.lib.management import ZulipBaseCommand
 from zerver.lib.send_email import send_custom_email
 from zerver.models import Realm, UserProfile
 
@@ -86,6 +89,9 @@ class Command(ZulipBaseCommand):
                     )
                 raise error
 
+        # Only email users who've agreed to the terms of service.
+        if settings.TOS_VERSION is not None:
+            users = users.exclude(tos_version=None)
         send_custom_email(users, options)
 
         if options["dry_run"]:

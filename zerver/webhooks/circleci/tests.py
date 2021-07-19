@@ -4,14 +4,14 @@ from zerver.lib.test_classes import WebhookTestCase
 class CircleCiHookTests(WebhookTestCase):
     STREAM_NAME = "circleci"
     URL_TEMPLATE = "/api/v1/external/circleci?stream={stream}&api_key={api_key}"
-    FIXTURE_DIR_NAME = "circleci"
+    WEBHOOK_DIR_NAME = "circleci"
 
     def test_private_repo_with_pull_request_off_bitbucket(self) -> None:
         expected_topic = "circleci-test"
         expected_message = """
 Build [#5](https://circleci.com/bb/Hypro999/circleci-test/5) of `build`/`workflow` on branch `unstable` has failed.
 - **Commits (3):** [6b5361c166](https://bitbucket.org/Hypro999/circleci-test/commits/6b5361c1661581d975e84b68904ae9bfba75d5e5) ... [eaa88f9eac](https://bitbucket.org/Hypro999/circleci-test/commits/eaa88f9eac0fad86c46a8fe35462fe2c904d84b1)
-- **Pull Request:** https://bitbucket.org/Hypro999/circleci-test/pull-requests/1
+- **Pull request:** https://bitbucket.org/Hypro999/circleci-test/pull-requests/1
 - **Author:** Hemanth V. Alluri
 """.strip()
         self.check_webhook(

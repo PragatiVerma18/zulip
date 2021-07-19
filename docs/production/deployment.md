@@ -45,7 +45,7 @@ extremely reliable for years, whereas the Docker image is new and has
 rough edges, so we recommend the normal installer unless you have a
 specific reason to prefer Docker.
 
-## Advanced Installer Options
+## Advanced installer options
 
 The Zulip installer supports the following advanced installer options
 as well as those mentioned in the
@@ -53,6 +53,16 @@ as well as those mentioned in the
 
 * `--postgresql-version`: Sets the version of PostgreSQL that will be
   installed.  We currently support PostgreSQL 10, 11, 12, and 13.
+
+* `--postgresql-database-name=exampledbname`: With this option, you
+  can customize the default database name. If you do not set this. The
+  default database name will be `zulip`. This setting can only be set
+  on the first install.
+
+* `--postgresql-database-user=exampledbuser`: With this option, you
+  can customize the default database user. If you do not set this. The
+  default database user will be `zulip`. This setting can only be set
+  on the first install.
 
 * `--postgresql-missing-dictionaries`: Set
   `postgresql.missing_dictionaries` ([docs][doc-settings]) in the
@@ -67,6 +77,13 @@ as well as those mentioned in the
 
 * `--no-overwrite-settings`: This option preserves existing
   `/etc/zulip` configuration files.
+
+## Installing on an existing server
+
+Zulip's installation process assumes it is the only application
+running on the server; though installing alongside other applications
+is not recommended, we do have [some notes on the
+process](../production/install-existing-server.md).
 
 ## Running Zulip's service dependencies on different machines
 
@@ -209,19 +226,24 @@ behind reverse proxies.
 ## Using an outgoing HTTP proxy
 
 Zulip supports routing all of its outgoing HTTP and HTTPS traffic
-through an HTTP `CONNECT` proxy, such as [`smokescreen`][smokescreen];
+through an HTTP `CONNECT` proxy, such as [Smokescreen][smokescreen];
 this includes outgoing webhooks, image and website previews, and
 mobile push notifications.  You may wish to enable this feature to
 provide a consistent egress point, or enforce access control on URLs
 to prevent [SSRF][ssrf] against internal resources.
 
-To use `smokescreen`:
+To use Smokescreen:
 
 1. Add `, zulip::profile::smokescreen` to the list of `puppet_classes`
    in `/etc/zulip/zulip.conf`.  A typical value after this change is:
     ```
     puppet_classes = zulip::profile::standalone, zulip::profile::smokescreen
     ```
+
+1. Optionally, configure the [smokescreen ACLs][smokescreen-acls]. By
+  default, Smokescreen denies access to all [non-public IP
+  addresses](https://en.wikipedia.org/wiki/Private_network), including
+  127.0.0.1.
 
 1. Add the following block to `/etc/zulip/zulip.conf`, substituting in
    your proxy's hostname/IP and port:
@@ -232,9 +254,14 @@ To use `smokescreen`:
     port = 4750
     ```
 
+1. If you intend to also make the Smokescreen install available to
+   other hosts, set `listen_address` in the same block.  Note that you
+   must control access to the Smokescreen port if you do this, as
+   failing to do so opens a public HTTP proxy!
+
 1. As root, run
    `/home/zulip/deployments/current/scripts/zulip-puppet-apply`.  This
-   will compile and install `smokescreen`, reconfigure services to use
+   will compile and install Smokescreen, reconfigure services to use
    it, and restart Zulip.
 
 If you would like to use an already-installed HTTP proxy, omit the
@@ -242,6 +269,7 @@ first step, and adjust the IP address and port in the second step
 accordingly.
 
 [smokescreen]: https://github.com/stripe/smokescreen
+[smokescreen-acls]: https://github.com/stripe/smokescreen#acls
 [ssrf]: https://owasp.org/www-community/attacks/Server_Side_Request_Forgery
 
 ## Putting the Zulip application behind a reverse proxy
@@ -642,3 +670,8 @@ proxy](#using-an-outgoing-http-proxy).
 #### `port`
 
 The TCP port of the HTTP `CONNECT` proxy on the host specified above.
+
+#### `listen_address`
+
+The IP address that Smokescreen should bind to and listen on.
+Defaults to `127.0.0.1`.

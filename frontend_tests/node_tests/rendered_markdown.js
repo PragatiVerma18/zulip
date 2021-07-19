@@ -8,10 +8,16 @@ const blueslip = require("../zjsunit/zblueslip");
 const $ = require("../zjsunit/zjquery");
 const {page_params} = require("../zjsunit/zpage_params");
 
-mock_cjs("jquery", $);
-mock_esm("../../static/js/rtl", {
-    get_direction: () => "ltr",
-});
+let clipboard_args;
+class Clipboard {
+    constructor(...args) {
+        clipboard_args = args;
+    }
+}
+
+mock_cjs("clipboard", Clipboard);
+
+const realm_playground = mock_esm("../../static/js/realm_playground");
 page_params.emojiset = "apple";
 
 const rm = zrequire("rendered_markdown");
@@ -26,9 +32,9 @@ const iago = {
 };
 
 const cordelia = {
-    email: "cordelia@zulup.com",
+    email: "cordelia@zulip.com",
     user_id: 31,
-    full_name: "Cordelia",
+    full_name: "Cordelia Lear",
 };
 people.init();
 people.add_active_user(iago);
@@ -69,7 +75,7 @@ const $array = (array) => {
 };
 
 const get_content_element = () => {
-    const $content = $.create(".rendered_markdown");
+    const $content = $.create("content-stub");
     $content.set_find_results(".user-mention", $array([]));
     $content.set_find_results(".user-group-mention", $array([]));
     $content.set_find_results("a.stream", $array([]));
@@ -79,11 +85,26 @@ const get_content_element = () => {
     $content.set_find_results(".emoji", $array([]));
     $content.set_find_results("div.spoiler-header", $array([]));
     $content.set_find_results("div.codehilite", $array([]));
+
+    // Fend off dumb security bugs by forcing devs to be
+    // intentional about HTML manipulation.
+    function security_violation() {
+        throw new Error(`
+            Be super careful about HTML manipulation.
+
+            Make sure your test objects set up their own
+            functions to validate that calls to html/prepend/append
+            use trusted values.
+        `);
+    }
+    $content.html = security_violation;
+    $content.prepend = security_violation;
+    $content.append = security_violation;
     return $content;
 };
 
 run_test("misc_helpers", () => {
-    const elem = $.create(".user-mention");
+    const elem = $.create("user-mention");
     rm.set_name_in_mention_element(elem, "Aaron");
     assert.equal(elem.text(), "@Aaron");
     elem.addClass("silent");
@@ -94,49 +115,104 @@ run_test("misc_helpers", () => {
 run_test("user-mention", () => {
     // Setup
     const $content = get_content_element();
-    const $iago = $.create(".user-mention(iago)");
+    const $iago = $.create("user-mention(iago)");
     $iago.set_find_results(".highlight", false);
     $iago.attr("data-user-id", iago.user_id);
-    const $cordelia = $.create(".user-mention(cordelia)");
+    const $cordelia = $.create("user-mention(cordelia)");
     $cordelia.set_find_results(".highlight", false);
     $cordelia.attr("data-user-id", cordelia.user_id);
     $content.set_find_results(".user-mention", $array([$iago, $cordelia]));
 
     // Initial asserts
-    assert(!$iago.hasClass("user-mention-me"));
+    assert.ok(!$iago.hasClass("user-mention-me"));
     assert.equal($iago.text(), "never-been-set");
     assert.equal($cordelia.text(), "never-been-set");
 
     rm.update_elements($content);
 
     // Final asserts
-    assert($iago.hasClass("user-mention-me"));
+    assert.ok($iago.hasClass("user-mention-me"));
     assert.equal($iago.text(), `@${iago.full_name}`);
     assert.equal($cordelia.text(), `@${cordelia.full_name}`);
+});
+
+run_test("user-mention (wildcard)", () => {
+    // Setup
+    const $content = get_content_element();
+    const $mention = $.create("mention");
+    $mention.attr("data-user-id", "*");
+    $content.set_find_results(".user-mention", $array([$mention]));
+
+    assert.ok(!$mention.hasClass("user-mention-me"));
+    rm.update_elements($content);
+    assert.ok($mention.hasClass("user-mention-me"));
+});
+
+run_test("user-mention (email)", () => {
+    // Setup
+    const $content = get_content_element();
+    const $mention = $.create("mention");
+    $mention.attr("data-user-email", cordelia.email);
+    $mention.set_find_results(".highlight", false);
+    $content.set_find_results(".user-mention", $array([$mention]));
+
+    rm.update_elements($content);
+    assert.ok(!$mention.hasClass("user-mention-me"));
+    assert.equal($mention.text(), "@Cordelia Lear");
+});
+
+run_test("user-mention (missing)", () => {
+    const $content = get_content_element();
+    const $mention = $.create("mention");
+    $content.set_find_results(".user-mention", $array([$mention]));
+
+    rm.update_elements($content);
+    assert.ok(!$mention.hasClass("user-mention-me"));
 });
 
 run_test("user-group-mention", () => {
     // Setup
     const $content = get_content_element();
-    const $group_me = $.create(".user-group-mention(me)");
+    const $group_me = $.create("user-group-mention(me)");
     $group_me.set_find_results(".highlight", false);
     $group_me.attr("data-user-group-id", group_me.id);
-    const $group_other = $.create(".user-group-mention(other)");
+    const $group_other = $.create("user-group-mention(other)");
     $group_other.set_find_results(".highlight", false);
     $group_other.attr("data-user-group-id", group_other.id);
     $content.set_find_results(".user-group-mention", $array([$group_me, $group_other]));
 
     // Initial asserts
-    assert(!$group_me.hasClass("user-mention-me"));
+    assert.ok(!$group_me.hasClass("user-mention-me"));
     assert.equal($group_me.text(), "never-been-set");
     assert.equal($group_other.text(), "never-been-set");
 
     rm.update_elements($content);
 
     // Final asserts
-    assert($group_me.hasClass("user-mention-me"));
+    assert.ok($group_me.hasClass("user-mention-me"));
     assert.equal($group_me.text(), `@${group_me.name}`);
     assert.equal($group_other.text(), `@${group_other.name}`);
+});
+
+run_test("user-group-mention (error)", () => {
+    const $content = get_content_element();
+    const $group = $.create("user-group-mention(bogus)");
+    $group.attr("data-user-group-id", "not-even-a-number");
+    $content.set_find_results(".user-group-mention", $array([$group]));
+
+    rm.update_elements($content);
+
+    assert.ok(!$group.hasClass("user-mention-me"));
+});
+
+run_test("user-group-mention (missing)", () => {
+    const $content = get_content_element();
+    const $group = $.create("whatever");
+    $content.set_find_results(".user-group-mention", $array([$group]));
+
+    rm.update_elements($content);
+
+    assert.ok(!$group.hasClass("user-mention-me"));
 });
 
 run_test("stream-links", () => {
@@ -163,7 +239,26 @@ run_test("stream-links", () => {
     assert.equal($stream_topic.text(), `#${stream.name} > topic name > still the topic name`);
 });
 
-run_test("timestamp", () => {
+run_test("timestamp without time", () => {
+    const $content = get_content_element();
+    const $timestamp = $.create("timestampe without actual time");
+    $content.set_find_results("time", $array([$timestamp]));
+
+    rm.update_elements($content);
+    assert.equal($timestamp.text(), "never-been-set");
+});
+
+run_test("timestamp", ({mock_template}) => {
+    mock_template("markdown_timestamp.hbs", true, (data, html) => {
+        assert.deepEqual(data, {text: "Thu, Jan 1 1970, 12:00 AM"});
+        return html;
+    });
+
+    mock_template("markdown_time_tooltip.hbs", true, (data, html) => {
+        assert.deepEqual(data, {tz_offset_str: "UTC"});
+        return html;
+    });
+
     // Setup
     const $content = get_content_element();
     const $timestamp = $.create("timestamp(valid)");
@@ -182,13 +277,23 @@ run_test("timestamp", () => {
     // Final asserts
     assert.equal($timestamp.html(), '<i class="fa fa-clock-o"></i>\nThu, Jan 1 1970, 12:00 AM\n');
     assert.equal(
-        $timestamp.attr("title"),
-        "This time is in your timezone. Original text was 'never-been-set'.",
+        $timestamp.attr("data-tippy-content"),
+        "Everyone sees this in their own time zone.\n<br/>\nYour time zone: UTC\n",
     );
     assert.equal($timestamp_invalid.text(), "never-been-set");
 });
 
-run_test("timestamp-twenty-four-hour-time", () => {
+run_test("timestamp-twenty-four-hour-time", ({mock_template}) => {
+    mock_template("markdown_timestamp.hbs", true, (data, html) => {
+        // sanity check incoming data
+        assert.ok(data.text.startsWith("Wed, Jul 15 2020, "));
+        return html;
+    });
+
+    mock_template("markdown_time_tooltip.hbs", false, (data) => {
+        assert.deepEqual(data, {tz_offset_str: "UTC"});
+    });
+
     const $content = get_content_element();
     const $timestamp = $.create("timestamp");
     $timestamp.attr("datetime", "2020-07-15T20:40:00Z");
@@ -228,7 +333,7 @@ run_test("timestamp-error", () => {
 run_test("emoji", () => {
     // Setup
     const $content = get_content_element();
-    const $emoji = $.create(".emoji");
+    const $emoji = $.create("emoji-stub");
     $emoji.attr("title", "tada");
     let called = false;
     $emoji.replaceWith = (f) => {
@@ -241,7 +346,7 @@ run_test("emoji", () => {
 
     rm.update_elements($content);
 
-    assert(called);
+    assert.ok(called);
 
     // Set page parameters back so that test run order is independent
     page_params.emojiset = "apple";
@@ -254,7 +359,7 @@ run_test("spoiler-header", () => {
     $content.set_find_results("div.spoiler-header", $array([$header]));
 
     // Test that the show/hide button gets added to a spoiler header.
-    const label = "My Spoiler Header";
+    const label = "My spoiler header";
     const toggle_button_html =
         '<span class="spoiler-button" aria-expanded="false"><span class="spoiler-arrow"></span></span>';
     $header.html(label);
@@ -274,4 +379,121 @@ run_test("spoiler-header-empty-fill", () => {
     $header.html("");
     rm.update_elements($content);
     assert.equal(toggle_button_html + "<p>translated HTML: Spoiler</p>", $header.html());
+});
+
+function assert_clipboard_setup() {
+    assert.equal(clipboard_args[0], "copy-code-stub");
+    const text = clipboard_args[1].text({
+        to_$: () => ({
+            siblings: (arg) => {
+                assert.equal(arg, "code");
+                return {
+                    text: () => "text",
+                };
+            },
+        }),
+    });
+    assert.equal(text, "text");
+}
+
+function test_code_playground(mock_template, viewing_code) {
+    const $content = get_content_element();
+    const $hilite = $.create("div.codehilite");
+    const $pre = $.create("hilite-pre");
+    $content.set_find_results("div.codehilite", $array([$hilite]));
+    $hilite.set_find_results("pre", $pre);
+
+    $hilite.data("code-language", "javascript");
+
+    const $copy_code_button = $.create("copy_code_button", {children: ["copy-code-stub"]});
+    const $view_code_in_playground = $.create("view_code_in_playground");
+
+    // The code playground code prepends a few buttons
+    // to the <pre> section of a highlighted piece of code.
+    // The args to prepend should be jQuery objects (or in
+    // our case "fake" zjquery objects).
+    const prepends = [];
+    $pre.prepend = (arg) => {
+        if (!arg.__zjquery) {
+            throw new Error("We should only prepend jQuery objects.");
+        }
+        prepends.push(arg);
+    };
+
+    mock_template("copy_code_button.hbs", false, (data) => {
+        assert.equal(data, undefined);
+        return {to_$: () => $copy_code_button};
+    });
+
+    if (viewing_code) {
+        mock_template("view_code_in_playground.hbs", false, (data) => {
+            assert.equal(data, undefined);
+            return {to_$: () => $view_code_in_playground};
+        });
+    }
+
+    rm.update_elements($content);
+
+    return {
+        prepends,
+        copy_code: $copy_code_button,
+        view_code: $view_code_in_playground,
+    };
+}
+
+run_test("code playground none", ({override, mock_template}) => {
+    override(realm_playground, "get_playground_info_for_languages", (language) => {
+        assert.equal(language, "javascript");
+        return undefined;
+    });
+
+    const {prepends, copy_code, view_code} = test_code_playground(mock_template, false);
+    assert.deepEqual(prepends, [copy_code]);
+    assert_clipboard_setup();
+
+    assert.equal(view_code.attr("data-tippy-content"), undefined);
+    assert.equal(view_code.attr("aria-label"), undefined);
+});
+
+run_test("code playground single", ({override, mock_template}) => {
+    override(realm_playground, "get_playground_info_for_languages", (language) => {
+        assert.equal(language, "javascript");
+        return [{name: "Some Javascript Playground"}];
+    });
+
+    const {prepends, copy_code, view_code} = test_code_playground(mock_template, true);
+    assert.deepEqual(prepends, [view_code, copy_code]);
+    assert_clipboard_setup();
+
+    assert.equal(
+        view_code.attr("data-tippy-content"),
+        "translated: View in Some Javascript Playground",
+    );
+    assert.equal(view_code.attr("aria-label"), "translated: View in Some Javascript Playground");
+    assert.equal(view_code.attr("aria-haspopup"), undefined);
+});
+
+run_test("code playground multiple", ({override, mock_template}) => {
+    override(realm_playground, "get_playground_info_for_languages", (language) => {
+        assert.equal(language, "javascript");
+        return ["whatever", "whatever"];
+    });
+
+    const {prepends, copy_code, view_code} = test_code_playground(mock_template, true);
+    assert.deepEqual(prepends, [view_code, copy_code]);
+    assert_clipboard_setup();
+
+    assert.equal(view_code.attr("data-tippy-content"), "translated: View in playground");
+    assert.equal(view_code.attr("aria-label"), "translated: View in playground");
+    assert.equal(view_code.attr("aria-haspopup"), "true");
+});
+
+run_test("rtl", () => {
+    const $content = get_content_element();
+
+    $content.text("مرحبا");
+
+    assert.ok(!$content.hasClass("rtl"));
+    rm.update_elements($content);
+    assert.ok($content.hasClass("rtl"));
 });

@@ -127,6 +127,8 @@ function pick_empty_narrow_banner() {
                 case "unread":
                     // You have no unread messages.
                     return $("#no_unread_narrow_message");
+                case "resolved":
+                    return $("#empty_narrow_resolved_topics");
             }
             // fallthrough to default case if no match is found
             break;
@@ -187,15 +189,8 @@ function pick_empty_narrow_banner() {
 export function show_empty_narrow_message() {
     $(".empty_feed_notice").hide();
     pick_empty_narrow_banner().show();
-    $("#left_bar_compose_reply_button_big").attr(
-        "title",
-        $t({defaultMessage: "There are no messages to reply to."}),
-    );
-    $("#left_bar_compose_reply_button_big").prop("disabled", true);
 }
 
 export function hide_empty_narrow_message() {
     $(".empty_feed_notice").hide();
-    $("#left_bar_compose_reply_button_big").attr("title", $t({defaultMessage: "Reply (r)"}));
-    $("#left_bar_compose_reply_button_big").prop("disabled", false);
 }

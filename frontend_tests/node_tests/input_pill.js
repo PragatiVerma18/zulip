@@ -2,7 +2,7 @@
 
 const {strict: assert} = require("assert");
 
-const {mock_cjs, mock_esm, set_global, zrequire} = require("../zjsunit/namespace");
+const {mock_esm, set_global, zrequire} = require("../zjsunit/namespace");
 const {run_test} = require("../zjsunit/test");
 const blueslip = require("../zjsunit/zblueslip");
 const $ = require("../zjsunit/zjquery");
@@ -12,7 +12,6 @@ set_global("document", {});
 const noop = () => {};
 const example_img_link = "http://example.com/example.png";
 
-mock_cjs("jquery", $);
 mock_esm("../../static/js/ui_util", {
     place_caret_at_end: noop,
 });
@@ -21,7 +20,6 @@ set_global("getSelection", () => ({
     anchorOffset: 0,
 }));
 
-zrequire("templates");
 const input_pill = zrequire("input_pill");
 
 function pill_html(value, data_id, img_src) {
@@ -40,7 +38,7 @@ function pill_html(value, data_id, img_src) {
     return require("../../static/templates/input_pill.hbs")(opts);
 }
 
-function override_random_id(override) {
+function override_random_id({override}) {
     let id_seq = 0;
     override(input_pill, "random_id", () => {
         id_seq += 1;
@@ -53,8 +51,13 @@ run_test("random_id", () => {
     input_pill.random_id();
 });
 
-run_test("basics", (override) => {
-    override_random_id(override);
+run_test("basics", ({override, mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(data.display_value, "JavaScript");
+        return html;
+    });
+
+    override_random_id({override});
     const config = {};
 
     blueslip.expect("error", "Pill needs container.");
@@ -93,7 +96,7 @@ run_test("basics", (override) => {
     };
 
     widget.appendValidatedData(item);
-    assert(inserted_before);
+    assert.ok(inserted_before);
 
     assert.deepEqual(widget.items(), [item]);
 });
@@ -144,8 +147,13 @@ function set_up() {
     };
 }
 
-run_test("copy from pill", (override) => {
-    override_random_id(override);
+run_test("copy from pill", ({override, mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.ok(["BLUE", "RED"].includes(data.display_value));
+        return html;
+    });
+
+    override_random_id({override});
     const info = set_up();
     const config = info.config;
     const container = info.container;
@@ -183,7 +191,12 @@ run_test("copy from pill", (override) => {
     assert.equal(copied_text, "RED");
 });
 
-run_test("paste to input", () => {
+run_test("paste to input", ({mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(typeof data.has_image, "boolean");
+        return html;
+    });
+
     const info = set_up();
     const config = info.config;
     const container = info.container;
@@ -222,10 +235,15 @@ run_test("paste to input", () => {
     });
 
     paste_handler(e);
-    assert(entered);
+    assert.ok(entered);
 });
 
-run_test("arrows on pills", () => {
+run_test("arrows on pills", ({mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(typeof data.has_image, "boolean");
+        return html;
+    });
+
     const info = set_up();
     const config = info.config;
     const container = info.container;
@@ -237,12 +255,9 @@ run_test("arrows on pills", () => {
 
     function test_key(c) {
         key_handler({
-            charCode: c,
+            key: c,
         });
     }
-
-    const LEFT_ARROW = 37;
-    const RIGHT_ARROW = 39;
 
     let prev_focused = false;
     let next_focused = false;
@@ -269,14 +284,19 @@ run_test("arrows on pills", () => {
     // We use the same stub to test both arrows, since we don't
     // actually cause any real state changes here.  We stub out
     // the only interaction, which is to move the focus.
-    test_key(LEFT_ARROW);
-    assert(prev_focused);
+    test_key("ArrowLeft");
+    assert.ok(prev_focused);
 
-    test_key(RIGHT_ARROW);
-    assert(next_focused);
+    test_key("ArrowRight");
+    assert.ok(next_focused);
 });
 
-run_test("left arrow on input", () => {
+run_test("left arrow on input", ({mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(typeof data.display_value, "string");
+        return html;
+    });
+
     const info = set_up();
     const config = info.config;
     const container = info.container;
@@ -284,7 +304,6 @@ run_test("left arrow on input", () => {
     const widget = input_pill.create(config);
     widget.appendValue("blue,red");
 
-    const LEFT_ARROW = 37;
     const key_handler = container.get_on_handler("keydown", ".input");
 
     let last_pill_focused = false;
@@ -300,13 +319,18 @@ run_test("left arrow on input", () => {
     });
 
     key_handler({
-        keyCode: LEFT_ARROW,
+        key: "ArrowLeft",
     });
 
-    assert(last_pill_focused);
+    assert.ok(last_pill_focused);
 });
 
-run_test("comma", () => {
+run_test("comma", ({mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(typeof data.display_value, "string");
+        return html;
+    });
+
     const info = set_up();
     const config = info.config;
     const items = info.items;
@@ -318,13 +342,12 @@ run_test("comma", () => {
 
     assert.deepEqual(widget.items(), [items.blue, items.red]);
 
-    const COMMA = 188;
     const key_handler = container.get_on_handler("keydown", ".input");
 
     pill_input.text(" yel");
 
     key_handler({
-        keyCode: COMMA,
+        key: ",",
         preventDefault: noop,
     });
 
@@ -333,14 +356,19 @@ run_test("comma", () => {
     pill_input.text(" yellow");
 
     key_handler({
-        keyCode: COMMA,
+        key: ",",
         preventDefault: noop,
     });
 
     assert.deepEqual(widget.items(), [items.blue, items.red, items.yellow]);
 });
 
-run_test("Enter key with text", () => {
+run_test("Enter key with text", ({mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(typeof data.display_value, "string");
+        return html;
+    });
+
     const info = set_up();
     const config = info.config;
     const items = info.items;
@@ -351,11 +379,10 @@ run_test("Enter key with text", () => {
 
     assert.deepEqual(widget.items(), [items.blue, items.red]);
 
-    const ENTER = 13;
     const key_handler = container.get_on_handler("keydown", ".input");
 
     key_handler({
-        keyCode: ENTER,
+        key: "Enter",
         preventDefault: noop,
         stopPropagation: noop,
         target: {
@@ -366,8 +393,14 @@ run_test("Enter key with text", () => {
     assert.deepEqual(widget.items(), [items.blue, items.red, items.yellow]);
 });
 
-run_test("insert_remove", (override) => {
-    override_random_id(override);
+run_test("insert_remove", ({override, mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(typeof data.display_value, "string");
+        assert.ok(html.startsWith, "<div class='pill'");
+        return html;
+    });
+
+    override_random_id({override});
     const info = set_up();
 
     const config = info.config;
@@ -395,8 +428,8 @@ run_test("insert_remove", (override) => {
 
     widget.appendValue("blue,chartreuse,red,yellow,mauve");
 
-    assert(created);
-    assert(!removed);
+    assert.ok(created);
+    assert.ok(!removed);
 
     assert.deepEqual(inserted_html, [
         pill_html("BLUE", "some_id1", example_img_link),
@@ -425,18 +458,17 @@ run_test("insert_remove", (override) => {
         pill.$element.remove = set_colored_removed_func(pill.item.display_value);
     }
 
-    const BACKSPACE = 8;
     let key_handler = container.get_on_handler("keydown", ".input");
 
     key_handler({
-        keyCode: BACKSPACE,
+        key: "Backspace",
         target: {
             textContent: "",
         },
         preventDefault: noop,
     });
 
-    assert(removed);
+    assert.ok(removed);
     assert.equal(color_removed, "YELLOW");
 
     assert.deepEqual(widget.items(), [items.blue, items.red]);
@@ -463,16 +495,22 @@ run_test("insert_remove", (override) => {
 
     key_handler = container.get_on_handler("keydown", ".pill");
     key_handler({
-        keyCode: BACKSPACE,
+        key: "Backspace",
         preventDefault: noop,
     });
 
     assert.equal(color_removed, "BLUE");
-    assert(next_pill_focused);
+    assert.ok(next_pill_focused);
 });
 
-run_test("exit button on pill", (override) => {
-    override_random_id(override);
+run_test("exit button on pill", ({override, mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(typeof data.display_value, "string");
+        assert.ok(html.startsWith, "<div class='pill'");
+        return html;
+    });
+
+    override_random_id({override});
     const info = set_up();
 
     const config = info.config;
@@ -522,7 +560,7 @@ run_test("exit button on pill", (override) => {
 
     exit_click_handler.call(exit_button_stub, e);
 
-    assert(next_pill_focused);
+    assert.ok(next_pill_focused);
 
     assert.deepEqual(widget.items(), [items.red]);
 });
@@ -551,7 +589,7 @@ run_test("misc things", () => {
     };
 
     animation_end_handler.call(input_stub);
-    assert(shake_class_removed);
+    assert.ok(shake_class_removed);
 
     // bad data
     blueslip.expect("error", "no display_value returned");
@@ -581,7 +619,13 @@ run_test("misc things", () => {
     container_click_handler.call(this_, {target: this_});
 });
 
-run_test("appendValue/clear", () => {
+run_test("appendValue/clear", ({mock_template}) => {
+    mock_template("input_pill.hbs", true, (data, html) => {
+        assert.equal(typeof data.display_value, "string");
+        assert.ok(html.startsWith, "<div class='pill'");
+        return html;
+    });
+
     const pill_input = $.create("pill_input");
     const container = $.create("container");
     container.set_find_results(".input", pill_input);

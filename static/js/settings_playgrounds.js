@@ -7,7 +7,6 @@ import {$t_html} from "./i18n";
 import * as ListWidget from "./list_widget";
 import {page_params} from "./page_params";
 import * as realm_playground from "./realm_playground";
-import * as typeahead_helper from "./typeahead_helper";
 import * as ui from "./ui";
 import * as ui_report from "./ui_report";
 
@@ -109,17 +108,21 @@ function build_page() {
 
     $(".organization form.admin-playground-form")
         .off("submit")
-        .on("submit", function (e) {
+        .on("submit", (e) => {
             e.preventDefault();
             e.stopPropagation();
             const playground_status = $("#admin-playground-status");
             const add_playground_button = $(".new-playground-form button");
             add_playground_button.prop("disabled", true);
             playground_status.hide();
-
+            const data = {
+                name: $("#playground_name").val(),
+                pygments_language: $("#playground_pygments_language").val(),
+                url_prefix: $("#playground_url_prefix").val(),
+            };
             channel.post({
                 url: "/json/realm/playgrounds",
-                data: $(this).serialize(),
+                data,
                 success() {
                     $("#playground_pygments_language").val("");
                     $("#playground_name").val("");
@@ -152,18 +155,29 @@ function build_page() {
             });
         });
 
-    $("#playground_pygments_language").typeahead({
-        source() {
-            return realm_playground.get_pygments_pretty_names_list();
+    const search_pygments_box = $("#playground_pygments_language");
+    let language_labels = new Map();
+
+    search_pygments_box.typeahead({
+        source(query) {
+            language_labels = realm_playground.get_pygments_typeahead_list(query);
+            return Array.from(language_labels.keys());
         },
         items: 5,
         fixed: true,
+        helpOnEmptyStrings: true,
         highlighter(item) {
-            return typeahead_helper.render_typeahead_item({primary: item});
+            return language_labels.get(item);
         },
         matcher(item) {
             const q = this.query.trim().toLowerCase();
             return item.toLowerCase().startsWith(q);
         },
+    });
+
+    search_pygments_box.on("click", (e) => {
+        search_pygments_box.typeahead("lookup").trigger("select");
+        e.preventDefault();
+        e.stopPropagation();
     });
 }

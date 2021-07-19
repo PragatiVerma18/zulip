@@ -180,7 +180,7 @@ def destroy_test_databases(worker_id: Optional[int] = None) -> None:
             # delete that database, we need to not pass a number
             # argument to destroy_test_db.
             if worker_id is not None:
-                """Modified from the Django original to """
+                """Modified from the Django original to"""
                 database_id = get_database_id(worker_id)
                 connection.creation.destroy_test_db(suffix=database_id)
             else:
@@ -205,7 +205,7 @@ def create_test_databases(worker_id: int) -> None:
         connection.close()
 
 
-def init_worker(counter: "multiprocessing.sharedctypes._Value") -> None:
+def init_worker(counter: "multiprocessing.sharedctypes.Synchronized[int]") -> None:
     """
     This function runs only under parallel mode. It initializes the
     individual processes which are also called workers.

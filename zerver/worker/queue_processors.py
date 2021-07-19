@@ -8,13 +8,12 @@ import functools
 import logging
 import os
 import signal
-import smtplib
 import socket
 import tempfile
 import time
 import urllib
 from abc import ABC, abstractmethod
-from collections import defaultdict, deque
+from collections import deque
 from email.message import EmailMessage
 from functools import wraps
 from threading import Lock, Timer
@@ -38,7 +37,7 @@ import orjson
 import sentry_sdk
 from django.conf import settings
 from django.core.mail.backends.smtp import EmailBackend
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models import F
 from django.utils.timezone import now as timezone_now
 from django.utils.translation import gettext as _
@@ -94,6 +93,7 @@ from zerver.models import (
     PreregistrationUser,
     Realm,
     RealmAuditLog,
+    ScheduledMessageNotificationEmail,
     UserMessage,
     UserProfile,
     filter_to_valid_prereg_users,
@@ -114,6 +114,16 @@ class WorkerTimeoutException(Exception):
 
     def __str__(self) -> str:
         return f"Timed out after {self.limit * self.event_count} seconds processing {self.event_count} events"
+
+
+class InterruptConsumeException(Exception):
+    """
+    This exception is to be thrown inside event consume function
+    if the intention is to simply interrupt the processing
+    of the current event and normally continue the work of the queue.
+    """
+
+    pass
 
 
 class WorkerDeclarationException(Exception):
@@ -182,7 +192,6 @@ def retry_send_email_failures(
         try:
             func(worker, data)
         except (
-            smtplib.SMTPServerDisconnected,
             socket.gaierror,
             socket.timeout,
             EmailNotDeliveredException,
@@ -197,10 +206,6 @@ def retry_send_email_failures(
             retry_event(worker.queue_name, data, on_failure)
 
     return wrapper
-
-
-def timer_expired(limit: int, event_count: int, signal: int, frame: FrameType) -> None:
-    raise WorkerTimeoutException(limit, event_count)
 
 
 class QueueProcessingWorker(ABC):
@@ -294,7 +299,7 @@ class QueueProcessingWorker(ABC):
                 try:
                     signal.signal(
                         signal.SIGALRM,
-                        functools.partial(timer_expired, self.MAX_CONSUME_SECONDS, len(events)),
+                        functools.partial(self.timer_expired, self.MAX_CONSUME_SECONDS, events),
                     )
                     try:
                         signal.alarm(self.MAX_CONSUME_SECONDS * len(events))
@@ -341,7 +346,17 @@ class QueueProcessingWorker(ABC):
         consume_func = lambda events: self.consume(events[0])
         self.do_consume(consume_func, [event])
 
+    def timer_expired(
+        self, limit: int, events: List[Dict[str, Any]], signal: int, frame: FrameType
+    ) -> None:
+        raise WorkerTimeoutException(limit, len(events))
+
     def _handle_consume_exception(self, events: List[Dict[str, Any]], exception: Exception) -> None:
+        if isinstance(exception, InterruptConsumeException):
+            # The exception signals that no further error handling
+            # is needed and the worker can proceed.
+            return
+
         with configure_scope() as scope:
             scope.set_context(
                 "events",
@@ -426,7 +441,11 @@ class ConfirmationEmailWorker(QueueProcessingWorker):
         logger.info(
             "Sending invitation for realm %s to %s", referrer.realm.string_id, invitee.email
         )
-        activate_url = do_send_confirmation_email(invitee, referrer)
+        if "email_language" in data:
+            email_language = data["email_language"]
+        else:
+            email_language = referrer.realm.default_language
+        activate_url = do_send_confirmation_email(invitee, referrer, email_language)
 
         # queue invitation reminder
         if settings.INVITATION_LINK_VALIDITY_DAYS >= 4:
@@ -442,7 +461,7 @@ class ConfirmationEmailWorker(QueueProcessingWorker):
                 referrer.realm,
                 to_emails=[invitee.email],
                 from_address=FromAddress.tokenized_no_reply_placeholder,
-                language=referrer.realm.default_language,
+                language=email_language,
                 context=context,
                 delay=datetime.timedelta(days=settings.INVITATION_LINK_VALIDITY_DAYS - 2),
             )
@@ -543,17 +562,9 @@ class MissedMessageWorker(QueueProcessingWorker):
     #
     # The timer is running whenever; we poll at most every TIMER_FREQUENCY
     # seconds, to avoid excessive activity.
-    #
-    # TODO: Since this process keeps events in memory for up to 2
-    # minutes, it now will lose approximately BATCH_DURATION worth of
-    # missed_message emails whenever it is restarted as part of a
-    # server restart.  We should probably add some sort of save/reload
-    # mechanism for that case.
     TIMER_FREQUENCY = 5
     BATCH_DURATION = 120
     timer_event: Optional[Timer] = None
-    events_by_recipient: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    batch_start_by_recipient: Dict[int, float] = {}
 
     # This lock protects access to all of the data structures declared
     # above.  A lock is required because maybe_send_batched_emails, as
@@ -571,11 +582,29 @@ class MissedMessageWorker(QueueProcessingWorker):
         with self.lock:
             logging.debug("Received missedmessage_emails event: %s", event)
 
-            # When we process an event, just put it into the queue and ensure we have a timer going.
-            user_profile_id = event["user_profile_id"]
-            if user_profile_id not in self.batch_start_by_recipient:
-                self.batch_start_by_recipient[user_profile_id] = time.time()
-            self.events_by_recipient[user_profile_id].append(event)
+            # When we consume an event, check if there are existing pending emails
+            # for that user, and if so use the same scheduled timestamp.
+            user_profile_id: int = event["user_profile_id"]
+            batch_duration = datetime.timedelta(seconds=self.BATCH_DURATION)
+
+            with transaction.atomic():
+                try:
+                    pending_email = ScheduledMessageNotificationEmail.objects.filter(
+                        user_profile_id=user_profile_id
+                    )[0]
+                    scheduled_timestamp = pending_email.scheduled_timestamp
+                except IndexError:
+                    scheduled_timestamp = timezone_now() + batch_duration
+
+                entry = ScheduledMessageNotificationEmail(
+                    user_profile_id=user_profile_id,
+                    message_id=event["message_id"],
+                    trigger=event["trigger"],
+                    scheduled_timestamp=scheduled_timestamp,
+                )
+                if "mentioned_user_group_id" in event:
+                    entry.mentioned_user_group_id = event["mentioned_user_group_id"]
+                entry.save()
 
             self.ensure_timer()
 
@@ -597,25 +626,44 @@ class MissedMessageWorker(QueueProcessingWorker):
             # is active.
             self.timer_event = None
 
-            current_time = time.time()
-            for user_profile_id, timestamp in list(self.batch_start_by_recipient.items()):
-                if current_time - timestamp < self.BATCH_DURATION:
-                    continue
-                events = self.events_by_recipient[user_profile_id]
-                logging.info(
-                    "Batch-processing %s missedmessage_emails events for user %s",
-                    len(events),
-                    user_profile_id,
-                )
-                handle_missedmessage_emails(user_profile_id, events)
-                del self.events_by_recipient[user_profile_id]
-                del self.batch_start_by_recipient[user_profile_id]
+            current_time = timezone_now()
+
+            with transaction.atomic():
+                events_to_process = ScheduledMessageNotificationEmail.objects.filter(
+                    scheduled_timestamp__lte=current_time
+                ).select_related()
+
+                # Batch the entries by user
+                events_by_recipient: Dict[int, List[Dict[str, Any]]] = {}
+                for event in events_to_process:
+                    entry = dict(
+                        user_profile_id=event.user_profile_id,
+                        message_id=event.message_id,
+                        trigger=event.trigger,
+                        mentioned_user_group_id=event.mentioned_user_group_id,
+                    )
+                    if event.user_profile_id in events_by_recipient:
+                        events_by_recipient[event.user_profile_id].append(entry)
+                    else:
+                        events_by_recipient[event.user_profile_id] = [entry]
+
+                for user_profile_id in events_by_recipient.keys():
+                    events: List[Dict[str, Any]] = events_by_recipient[user_profile_id]
+
+                    logging.info(
+                        "Batch-processing %s missedmessage_emails events for user %s",
+                        len(events),
+                        user_profile_id,
+                    )
+                    handle_missedmessage_emails(user_profile_id, events)
+
+                events_to_process.delete()
 
             # By only restarting the timer if there are actually events in
             # the queue, we ensure this queue processor is idle when there
             # are no missed-message emails to process.  This avoids
             # constant CPU usage when there is no work to do.
-            if len(self.batch_start_by_recipient) > 0:
+            if ScheduledMessageNotificationEmail.objects.exists():
                 self.ensure_timer()
 
 
@@ -649,7 +697,7 @@ class EmailSendingWorker(LoopQueueProcessingWorker):
 
 
 @assign_queue("missedmessage_mobile_notifications")
-class PushNotificationsWorker(QueueProcessingWorker):  # nocoverage
+class PushNotificationsWorker(QueueProcessingWorker):
     def start(self) -> None:
         # initialize_push_notifications doesn't strictly do anything
         # beyond printing some logging warnings if push notifications
@@ -661,7 +709,13 @@ class PushNotificationsWorker(QueueProcessingWorker):  # nocoverage
         try:
             if event.get("type", "add") == "remove":
                 message_ids = event.get("message_ids")
-                if message_ids is None:  # legacy task across an upgrade
+                if message_ids is None:
+                    # TODO/compatibility: Previously, we sent only one `message_id` in
+                    # a payload for notification remove events. This was later changed
+                    # to send a list of `message_ids` (with that field name), but we need
+                    # compatibility code for events present in the queue during upgrade.
+                    # Remove this when one can no longer upgrade from 1.9.2 (or earlier)
+                    # to any version after 2.0.0
                     message_ids = [event["message_id"]]
                 handle_remove_push_notification(event["user_profile_id"], message_ids)
             else:
@@ -742,7 +796,7 @@ class FetchLinksEmbedData(QueueProcessingWorker):
 
         message = Message.objects.get(id=event["message_id"])
         # If the message changed, we will run this task after updating the message
-        # in zerver.views.message_edit.update_message_backend
+        # in zerver.lib.actions.check_update_message
         if message.content != event["message_content"]:
             return
         if message.content is not None:
@@ -755,10 +809,24 @@ class FetchLinksEmbedData(QueueProcessingWorker):
             realm = Realm.objects.get(id=event["message_realm_id"])
 
             # If rendering fails, the called code will raise a JsonableError.
-            rendered_content = render_incoming_message(
+            rendering_result = render_incoming_message(
                 message, message.content, message_user_ids, realm
             )
-            do_update_embedded_data(message.sender, message, message.content, rendered_content)
+            do_update_embedded_data(message.sender, message, message.content, rendering_result)
+
+    def timer_expired(
+        self, limit: int, events: List[Dict[str, Any]], signal: int, frame: FrameType
+    ) -> None:
+        assert len(events) == 1
+        event = events[0]
+
+        logging.warning(
+            "Timed out after %s seconds while fetching URLs for message %s: %s",
+            limit,
+            event["message_id"],
+            event["urls"],
+        )
+        raise InterruptConsumeException
 
 
 @assign_queue("outgoing_webhooks")
@@ -832,7 +900,13 @@ class DeferredWorker(QueueProcessingWorker):
             user_profile = get_user_profile_by_id(event["user_profile_id"])
 
             for recipient_id in event["stream_recipient_ids"]:
-                do_mark_stream_messages_as_read(user_profile, recipient_id)
+                count = do_mark_stream_messages_as_read(user_profile, recipient_id)
+                logger.info(
+                    "Marked %s messages as read for user %s, stream_recipient_id %s",
+                    count,
+                    user_profile.id,
+                    recipient_id,
+                )
         elif event["type"] == "mark_stream_messages_as_read_for_everyone":
             # This event is generated by the stream deactivation code path.
             batch_size = 100
@@ -847,6 +921,11 @@ class DeferredWorker(QueueProcessingWorker):
                 offset += len(messages)
                 if len(messages) < batch_size:
                     break
+            logger.info(
+                "Marked %s messages as read for all users, stream_recipient_id %s",
+                offset,
+                event["stream_recipient_id"],
+            )
         elif event["type"] == "clear_push_device_tokens":
             try:
                 clear_push_device_tokens(event["user_profile_id"])

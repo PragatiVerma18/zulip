@@ -1,12 +1,11 @@
 import os
 import re
-from typing import Optional, Tuple
+from typing import Tuple
 
 import orjson
 from django.utils.translation import gettext as _
 
-from zerver.lib.exceptions import OrganizationAdministratorRequired
-from zerver.lib.request import JsonableError
+from zerver.lib.exceptions import JsonableError, OrganizationAdministratorRequired
 from zerver.lib.storage import static_path
 from zerver.lib.upload import upload_backend
 from zerver.models import Reaction, Realm, RealmEmoji, UserProfile
@@ -30,7 +29,7 @@ EMOTICON_CONVERSIONS = emoji_codes["emoticon_conversions"]
 possible_emoticons = EMOTICON_CONVERSIONS.keys()
 possible_emoticon_regexes = (re.escape(emoticon) for emoticon in possible_emoticons)
 terminal_symbols = ",.;?!()\\[\\] \"'\\n\\t"  # from composebox_typeahead.js
-emoticon_regex = (
+EMOTICON_RE = (
     f"(?<![^{terminal_symbols}])(?P<emoticon>("
     + ")|(".join(possible_emoticon_regexes)
     + f"))(?![^{terminal_symbols}])"
@@ -85,28 +84,28 @@ def check_emoji_request(realm: Realm, emoji_name: str, emoji_code: str, emoji_ty
         raise JsonableError(_("Invalid emoji type."))
 
 
-def check_emoji_admin(user_profile: UserProfile, emoji_name: Optional[str] = None) -> None:
-    """Raises an exception if the user cannot administer the target realm
-    emoji name in their organization."""
+def check_add_emoji_admin(user_profile: UserProfile) -> None:
+    """Raises an exception if the user cannot add the emoji in their organization."""
 
-    # Realm administrators can always administer emoji
+    # Realm administrators can always add emoji
     if user_profile.is_realm_admin:
         return
     if user_profile.realm.add_emoji_by_admins_only:
         raise OrganizationAdministratorRequired()
 
-    # Otherwise, normal users can add emoji
-    if emoji_name is None:
+
+def check_remove_custom_emoji(user_profile: UserProfile, emoji_name: str) -> None:
+    # normal users can remove emoji they themselves added
+    if user_profile.is_realm_admin:
         return
 
-    # Additionally, normal users can remove emoji they themselves added
     emoji = RealmEmoji.objects.filter(
         realm=user_profile.realm, name=emoji_name, deactivated=False
     ).first()
     current_user_is_author = (
         emoji is not None and emoji.author is not None and emoji.author.id == user_profile.id
     )
-    if not user_profile.is_realm_admin and not current_user_is_author:
+    if not current_user_is_author:
         raise JsonableError(_("Must be an organization administrator or emoji author"))
 
 

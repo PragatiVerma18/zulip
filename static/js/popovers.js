@@ -1,11 +1,10 @@
 import ClipboardJS from "clipboard";
-import {add, formatISO, parseISO, set} from "date-fns";
+import {add, formatISO, set} from "date-fns";
 import ConfirmDatePlugin from "flatpickr/dist/plugins/confirmDate/confirmDate";
 import $ from "jquery";
+import tippy, {hideAll} from "tippy.js";
 
 import render_actions_popover_content from "../templates/actions_popover_content.hbs";
-import render_mobile_message_buttons_popover from "../templates/mobile_message_buttons_popover.hbs";
-import render_mobile_message_buttons_popover_content from "../templates/mobile_message_buttons_popover_content.hbs";
 import render_no_arrow_popover from "../templates/no_arrow_popover.hbs";
 import render_playground_links_popover_content from "../templates/playground_links_popover_content.hbs";
 import render_remind_me_popover_content from "../templates/remind_me_popover_content.hbs";
@@ -13,7 +12,6 @@ import render_user_group_info_popover from "../templates/user_group_info_popover
 import render_user_group_info_popover_content from "../templates/user_group_info_popover_content.hbs";
 import render_user_info_popover_content from "../templates/user_info_popover_content.hbs";
 import render_user_info_popover_title from "../templates/user_info_popover_title.hbs";
-import render_user_profile_modal from "../templates/user_profile_modal.hbs";
 
 import * as blueslip from "./blueslip";
 import * as buddy_data from "./buddy_data";
@@ -30,20 +28,21 @@ import * as message_edit from "./message_edit";
 import * as message_edit_history from "./message_edit_history";
 import * as message_lists from "./message_lists";
 import * as message_viewport from "./message_viewport";
-import * as muting from "./muting";
-import * as muting_ui from "./muting_ui";
+import * as muted_topics from "./muted_topics";
+import * as muted_topics_ui from "./muted_topics_ui";
+import * as muted_users from "./muted_users";
+import * as muted_users_ui from "./muted_users_ui";
 import * as narrow from "./narrow";
 import * as narrow_state from "./narrow_state";
 import * as overlays from "./overlays";
 import {page_params} from "./page_params";
 import * as people from "./people";
+import * as popover_menus from "./popover_menus";
 import * as realm_playground from "./realm_playground";
 import * as reminder from "./reminder";
 import * as resize from "./resize";
 import * as rows from "./rows";
-import * as settings_account from "./settings_account";
 import * as settings_data from "./settings_data";
-import * as settings_profile_fields from "./settings_profile_fields";
 import * as stream_popover from "./stream_popover";
 import * as user_groups from "./user_groups";
 import * as user_status from "./user_status";
@@ -53,7 +52,6 @@ import * as util from "./util";
 let current_actions_popover_elem;
 let current_flatpickr_instance;
 let current_message_info_popover_elem;
-let current_mobile_message_buttons_popover_elem;
 let current_user_info_popover_elem;
 let current_playground_links_popover_elem;
 let userlist_placement = "right";
@@ -64,7 +62,6 @@ export function clear_for_testing() {
     current_actions_popover_elem = undefined;
     current_flatpickr_instance = undefined;
     current_message_info_popover_elem = undefined;
-    current_mobile_message_buttons_popover_elem = undefined;
     current_user_info_popover_elem = undefined;
     current_playground_links_popover_elem = undefined;
     list_of_popovers.length = 0;
@@ -77,7 +74,7 @@ export function clipboard_enable(arg) {
     return new ClipboardJS(arg);
 }
 
-function elem_to_user_id(elem) {
+export function elem_to_user_id(elem) {
     return Number.parseInt(elem.attr("data-user-id"), 10);
 }
 
@@ -85,21 +82,17 @@ function elem_to_user_id(elem) {
 // and push the $.fn.data($o, "popover") results to an array.
 // this is needed so that when we try to unload popovers, we can kill all dead
 // ones that no longer have valid parents in the DOM.
-(function (popover) {
-    $.fn.popover = function (...args) {
-        // apply the jQuery object as `this`, and popover function arguments.
-        popover.apply(this, args);
+const old_popover = $.fn.popover;
+$.fn.popover = Object.assign(function (...args) {
+    // apply the jQuery object as `this`, and popover function arguments.
+    old_popover.apply(this, args);
 
-        // if there is a valid "popover" key in the jQuery data object then
-        // push it to the array.
-        if (this.data("popover")) {
-            list_of_popovers.push(this.data("popover"));
-        }
-    };
-
-    // add back all shallow properties of $.fn.popover to the new proxied version.
-    Object.assign($.fn.popover, popover);
-})($.fn.popover);
+    // if there is a valid "popover" key in the jQuery data object then
+    // push it to the array.
+    if (this.data("popover")) {
+        list_of_popovers.push(this.data("popover"));
+    }
+}, old_popover);
 
 function copy_email_handler(e) {
     const email_el = $(e.trigger.parentElement);
@@ -145,6 +138,24 @@ function init_email_clipboard() {
     });
 }
 
+function init_email_tooltip(user) {
+    /*
+        This displays the email tooltip for folks
+        who have names that would overflow past the right
+        edge of our user mention popup.
+    */
+
+    $(".user_popover_email").each(function () {
+        if (this.clientWidth < this.scrollWidth) {
+            tippy(this, {
+                placement: "bottom",
+                content: people.get_visible_email(user),
+                interactive: true,
+            });
+        }
+    });
+}
+
 function load_medium_avatar(user, elt) {
     const avatar_path = "avatar/" + user.user_id + "/medium?v=" + user.avatar_version;
     const user_avatar_url = new URL(avatar_path, window.location.href);
@@ -170,53 +181,6 @@ function calculate_info_popover_placement(size, elt) {
     return undefined;
 }
 
-function get_custom_profile_field_data(user, field, field_types, dateFormat) {
-    const field_value = people.get_custom_profile_data(user.user_id, field.id);
-    const field_type = field.type;
-    const profile_field = {};
-
-    if (!field_value) {
-        return profile_field;
-    }
-    if (!field_value.value) {
-        return profile_field;
-    }
-    profile_field.name = field.name;
-    profile_field.is_user_field = false;
-    profile_field.is_link = field_type === field_types.URL.id;
-    profile_field.is_external_account = field_type === field_types.EXTERNAL_ACCOUNT.id;
-    profile_field.type = field_type;
-
-    switch (field_type) {
-        case field_types.DATE.id:
-            profile_field.value = dateFormat.format(parseISO(field_value.value));
-            break;
-        case field_types.USER.id:
-            profile_field.id = field.id;
-            profile_field.is_user_field = true;
-            profile_field.value = field_value.value;
-            break;
-        case field_types.SELECT.id: {
-            const field_choice_dict = JSON.parse(field.field_data);
-            profile_field.value = field_choice_dict[field_value.value].text;
-            break;
-        }
-        case field_types.SHORT_TEXT.id:
-        case field_types.LONG_TEXT.id:
-            profile_field.value = field_value.value;
-            profile_field.rendered_value = field_value.rendered_value;
-            break;
-        case field_types.EXTERNAL_ACCOUNT.id:
-            profile_field.value = field_value.value;
-            profile_field.field_data = JSON.parse(field.field_data);
-            profile_field.link = settings_profile_fields.get_external_account_link(profile_field);
-            break;
-        default:
-            profile_field.value = field_value.value;
-    }
-    return profile_field;
-}
-
 function render_user_info_popover(
     user,
     popover_element,
@@ -239,9 +203,8 @@ function render_user_info_popover(
         }
     }
 
-    const is_dev = page_params.development_environment;
-    const muting_allowed = is_dev && !is_me && !user.is_bot;
-    const is_muted = muting.is_user_muted(user.user_id);
+    const muting_allowed = !is_me && !user.is_bot;
+    const is_muted = muted_users.is_user_muted(user.user_id);
 
     const args = {
         can_revoke_away,
@@ -258,7 +221,7 @@ function render_user_info_popover(
         private_message_class: private_msg_class,
         sent_by_uri: hash_util.by_sender_uri(user.email),
         show_email: settings_data.show_email(),
-        show_user_profile: !(user.is_bot || page_params.custom_profile_fields.length === 0),
+        show_user_profile: !user.is_bot,
         user_email: people.get_visible_email(user),
         user_full_name: user.full_name,
         user_id: user.user_id,
@@ -300,6 +263,8 @@ function render_user_info_popover(
     popover_element.popover("show");
 
     init_email_clipboard();
+    init_email_tooltip(user);
+
     load_medium_avatar(user, $(".popover-avatar"));
 }
 
@@ -340,75 +305,6 @@ function show_user_info_popover_for_message(element, user, message) {
 
         current_message_info_popover_elem = elt;
     }
-}
-
-function show_mobile_message_buttons_popover(element) {
-    const last_popover_elem = current_mobile_message_buttons_popover_elem;
-    hide_all();
-    if (last_popover_elem !== undefined && last_popover_elem.get()[0] === element) {
-        // We want it to be the case that a user can dismiss a popover
-        // by clicking on the same element that caused the popover.
-        return;
-    }
-
-    const $element = $(element);
-    $element.popover({
-        placement: "left",
-        template: render_mobile_message_buttons_popover(),
-        content: render_mobile_message_buttons_popover_content({
-            is_in_private_narrow: narrow_state.narrowed_to_pms(),
-        }),
-        html: true,
-        trigger: "manual",
-    });
-    $element.popover("show");
-
-    current_mobile_message_buttons_popover_elem = $element;
-}
-
-export function hide_mobile_message_buttons_popover() {
-    if (current_mobile_message_buttons_popover_elem) {
-        current_mobile_message_buttons_popover_elem.popover("destroy");
-        current_mobile_message_buttons_popover_elem = undefined;
-    }
-}
-
-export function hide_user_profile() {
-    $("#user-profile-modal").modal("hide");
-}
-
-export function show_user_profile(user) {
-    hide_all();
-
-    const dateFormat = new Intl.DateTimeFormat("default", {dateStyle: "long"});
-    const field_types = page_params.custom_profile_field_types;
-    const profile_data = page_params.custom_profile_fields
-        .map((f) => get_custom_profile_field_data(user, f, field_types, dateFormat))
-        .filter((f) => f.name !== undefined);
-
-    const args = {
-        full_name: user.full_name,
-        email: people.get_visible_email(user),
-        profile_data,
-        user_avatar: "avatar/" + user.email + "/medium",
-        is_me: people.is_current_user(user.email),
-        date_joined: dateFormat.format(parseISO(user.date_joined)),
-        last_seen: buddy_data.user_last_seen_time_status(user.user_id),
-        show_email: settings_data.show_email(),
-        user_time: people.get_user_time(user.user_id),
-        user_type: people.get_user_type(user.user_id),
-        user_is_guest: user.is_guest,
-    };
-
-    $("#user-profile-modal-holder").html(render_user_profile_modal(args));
-    $("#user-profile-modal").modal("show");
-
-    settings_account.initialize_custom_user_type_fields(
-        "#user-profile-modal #content",
-        user.user_id,
-        false,
-        false,
-    );
 }
 
 export function show_user_info_popover(element, user) {
@@ -473,7 +369,7 @@ function fetch_group_members(member_ids) {
 }
 
 function sort_group_members(members) {
-    return members.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    return members.sort((a, b) => util.strcmp(a.full_name, b.fullname));
 }
 
 // exporting these functions for testing purposes
@@ -526,9 +422,15 @@ export function toggle_actions_popover(element, id) {
 
     $(element).closest(".message_row").toggleClass("has_popover has_actions_popover");
     message_lists.current.select_id(id);
+    const not_spectator = !page_params.is_spectator;
     const elt = $(element);
     if (elt.data("popover") === undefined) {
         const message = message_lists.current.get(id);
+        const message_container = message_lists.current.view.message_containers.get(message.id);
+        const should_display_hide_option =
+            muted_users.is_user_muted(message.sender_id) &&
+            !message_container.is_hidden &&
+            not_spectator;
         const editability = message_edit.get_editability(message);
         let use_edit_icon;
         let editability_menu_item;
@@ -544,9 +446,12 @@ export function toggle_actions_popover(element, id) {
         }
         const topic = message.topic;
         const can_mute_topic =
-            message.stream && topic && !muting.is_topic_muted(message.stream_id, topic);
+            message.stream &&
+            topic &&
+            !muted_topics.is_topic_muted(message.stream_id, topic) &&
+            not_spectator;
         const can_unmute_topic =
-            message.stream && topic && muting.is_topic_muted(message.stream_id, topic);
+            message.stream && topic && muted_topics.is_topic_muted(message.stream_id, topic);
 
         const should_display_edit_history_option =
             message.edit_history &&
@@ -555,25 +460,32 @@ export function toggle_actions_popover(element, id) {
                     entry.prev_content !== undefined ||
                     util.get_edit_event_prev_topic(entry) !== undefined,
             ) &&
-            page_params.realm_allow_edit_history;
+            page_params.realm_allow_edit_history &&
+            not_spectator;
 
         // Disabling this for /me messages is a temporary workaround
         // for the fact that we don't have a styling for how that
         // should look.  See also condense.js.
         const should_display_collapse =
-            !message.locally_echoed && !message.is_me_message && !message.collapsed;
+            !message.locally_echoed &&
+            !message.is_me_message &&
+            !message.collapsed &&
+            not_spectator;
         const should_display_uncollapse =
             !message.locally_echoed && !message.is_me_message && message.collapsed;
 
         const should_display_edit_and_view_source =
-            message.content !== "<p>(deleted)</p>" ||
-            editability === message_edit.editability_types.FULL ||
-            editability === message_edit.editability_types.TOPIC_ONLY;
-        const should_display_quote_and_reply = message.content !== "<p>(deleted)</p>";
+            (message.content !== "<p>(deleted)</p>" ||
+                editability === message_edit.editability_types.FULL ||
+                editability === message_edit.editability_types.TOPIC_ONLY) &&
+            not_spectator;
+        const should_display_quote_and_reply =
+            message.content !== "<p>(deleted)</p>" && not_spectator;
 
         const conversation_time_uri = hash_util.by_conversation_and_time_uri(message);
 
-        const should_display_delete_option = message_edit.get_deletability(message);
+        const should_display_delete_option =
+            message_edit.get_deletability(message) && not_spectator;
         const args = {
             message_id: message.id,
             historical: message.historical,
@@ -587,6 +499,7 @@ export function toggle_actions_popover(element, id) {
             should_display_uncollapse,
             should_display_add_reaction_option: message.sent_by_me,
             should_display_edit_history_option,
+            should_display_hide_option,
             conversation_time_uri,
             narrowed: narrow_state.active(),
             should_display_delete_option,
@@ -1013,14 +926,6 @@ export function register_click_handlers() {
         e.preventDefault();
     });
 
-    $("body").on("click", ".info_popover_actions .view_full_user_profile", (e) => {
-        const user_id = elem_to_user_id($(e.target).parents("ul"));
-        const user = people.get_by_user_id(user_id);
-        show_user_profile(user);
-        e.stopPropagation();
-        e.preventDefault();
-    });
-
     $("body").on("click", ".info_popover_actions .clear_status", (e) => {
         e.preventDefault();
         const me = elem_to_user_id($(e.target).parents("ul"));
@@ -1041,15 +946,9 @@ export function register_click_handlers() {
         e.preventDefault();
     });
 
-    $("body").on("click", "#user-profile-modal #name #edit-button", () => {
-        hide_user_profile();
-    });
-
-    $("body").on("click", ".compose_mobile_button", function (e) {
-        show_mobile_message_buttons_popover(this);
-        e.stopPropagation();
-        e.preventDefault();
-    });
+    /* These click handlers are implemented as just deep links to the
+     * relevant part of the Zulip UI, so we don't want preventDefault,
+     * but we do want to close the modal when you click them. */
 
     $("body").on("click", ".set_away_status", (e) => {
         hide_all();
@@ -1068,7 +967,7 @@ export function register_click_handlers() {
     $("body").on("click", ".update_status_text", (e) => {
         hide_all();
 
-        user_status_ui.open_overlay();
+        user_status_ui.open_user_status_modal();
 
         e.stopPropagation();
         e.preventDefault();
@@ -1080,14 +979,14 @@ export function register_click_handlers() {
         hide_user_sidebar_popover();
         e.stopPropagation();
         e.preventDefault();
-        muting_ui.confirm_mute_user(user_id);
+        muted_users_ui.confirm_mute_user(user_id);
     });
 
     $("body").on("click", ".info_popover_actions .sidebar-popover-unmute-user", (e) => {
         const user_id = elem_to_user_id($(e.target).parents("ul"));
         hide_message_info_popover();
         hide_user_sidebar_popover();
-        muting_ui.unmute_user(user_id);
+        muted_users_ui.unmute_user(user_id);
         e.stopPropagation();
         e.preventDefault();
     });
@@ -1130,16 +1029,6 @@ export function register_click_handlers() {
 
         current_user_sidebar_user_id = user.user_id;
         current_user_sidebar_popover = target.data("popover");
-    });
-
-    $("body").on("mouseenter", ".user_popover_email", function () {
-        const tooltip_holder = $(this).find("div");
-
-        if (this.offsetWidth < this.scrollWidth) {
-            tooltip_holder.addClass("display-tooltip");
-        } else {
-            tooltip_holder.removeClass("display-tooltip");
-        }
     });
 
     $("body").on("click", ".respond_button", (e) => {
@@ -1254,15 +1143,29 @@ export function register_click_handlers() {
         e.stopPropagation();
         e.preventDefault();
     });
+    $("body").on("click", ".rehide_muted_user_message", (e) => {
+        const message_id = $(e.currentTarget).data("message-id");
+        const row = message_lists.current.get_row(message_id);
+        const message = message_lists.current.get(rows.id(row));
+        const message_container = message_lists.current.view.message_containers.get(message.id);
+
+        hide_actions_popover();
+
+        if (row && !message_container.is_hidden) {
+            message_lists.current.view.hide_revealed_message(message_id);
+        }
+
+        e.stopPropagation();
+        e.preventDefault();
+    });
     $("body").on("click", ".view_edit_history", (e) => {
         const message_id = $(e.currentTarget).data("message-id");
         const row = message_lists.current.get_row(message_id);
         const message = message_lists.current.get(rows.id(row));
-        const message_history_cancel_btn = $("#message-history-cancel");
 
         hide_actions_popover();
         message_edit_history.show_history(message);
-        message_history_cancel_btn.trigger("focus");
+        $("#message-history-cancel").trigger("focus");
         e.stopPropagation();
         e.preventDefault();
     });
@@ -1272,7 +1175,7 @@ export function register_click_handlers() {
         const topic = $(e.currentTarget).attr("data-msg-topic");
 
         hide_actions_popover();
-        muting_ui.mute_topic(stream_id, topic);
+        muted_topics_ui.mute_topic(stream_id, topic);
         e.stopPropagation();
         e.preventDefault();
     });
@@ -1282,7 +1185,7 @@ export function register_click_handlers() {
         const topic = $(e.currentTarget).attr("data-msg-topic");
 
         hide_actions_popover();
-        muting_ui.unmute_topic(stream_id, topic);
+        muted_topics_ui.unmute_topic(stream_id, topic);
         e.stopPropagation();
         e.preventDefault();
     });
@@ -1295,11 +1198,10 @@ export function register_click_handlers() {
         e.preventDefault();
     });
 
-    clipboard_enable(".copy_link");
-
-    $("body").on("click", ".copy_link", function (e) {
+    clipboard_enable(".copy_link").on("success", (e) => {
         hide_actions_popover();
-        const message_id = $(this).attr("data-message-id");
+        // e.trigger returns the DOM element triggering the copy action
+        const message_id = e.trigger.getAttribute("data-message-id");
         const row = $(`[zid='${CSS.escape(message_id)}']`);
         row.find(".alert-msg")
             .text($t({defaultMessage: "Copied!"}))
@@ -1312,9 +1214,6 @@ export function register_click_handlers() {
             // We unfocus this so keyboard shortcuts, etc., will work again.
             $(":focus").trigger("blur");
         }, 0);
-
-        e.stopPropagation();
-        e.preventDefault();
     });
 
     clipboard_enable(".copy_mention_syntax");
@@ -1325,7 +1224,7 @@ export function register_click_handlers() {
         e.preventDefault();
     });
 
-    (function () {
+    {
         let last_scroll = 0;
 
         $(".app").on("scroll", () => {
@@ -1346,13 +1245,15 @@ export function register_click_handlers() {
             // retrigger `hide_all` while still scrolling.
             last_scroll = date;
         });
-    })();
+    }
 }
 
 export function any_active() {
     // True if any popover (that this module manages) is currently shown.
     // Expanded sidebars on mobile view count as popovers as well.
     return (
+        popover_menus.is_left_sidebar_stream_setting_popover_displayed() ||
+        popover_menus.is_compose_mobile_button_popover_displayed() ||
         actions_popped() ||
         user_sidebar_popped() ||
         stream_popover.stream_popped() ||
@@ -1367,8 +1268,13 @@ export function any_active() {
 // This function will hide all true popovers (the streamlist and
 // userlist sidebars use the popover infrastructure, but doesn't work
 // like a popover structurally).
-export function hide_all_except_sidebars() {
+export function hide_all_except_sidebars(opts) {
     $(".has_popover").removeClass("has_popover has_actions_popover has_emoji_popover");
+    if (!opts || !opts.not_hide_tippy_instances) {
+        hideAll();
+    } else if (opts.exclude_tippy_instance) {
+        hideAll({exclude: opts.exclude_tippy_instance});
+    }
     hide_actions_popover();
     hide_message_info_popover();
     emoji_picker.hide_emoji_popover();
@@ -1378,8 +1284,6 @@ export function hide_all_except_sidebars() {
     stream_popover.hide_all_messages_popover();
     stream_popover.hide_starred_messages_popover();
     hide_user_sidebar_popover();
-    hide_mobile_message_buttons_popover();
-    hide_user_profile();
     hide_user_info_popover();
     hide_playground_links_popover();
 
@@ -1394,10 +1298,13 @@ export function hide_all_except_sidebars() {
 
 // This function will hide all the popovers, including the mobile web
 // or narrow window sidebars.
-export function hide_all() {
+export function hide_all(not_hide_tippy_instances) {
     hide_userlist_sidebar();
     stream_popover.hide_streamlist_sidebar();
-    hide_all_except_sidebars();
+    hide_all_except_sidebars({
+        exclude_tippy_instance: undefined,
+        not_hide_tippy_instances,
+    });
 }
 
 export function set_userlist_placement(placement) {

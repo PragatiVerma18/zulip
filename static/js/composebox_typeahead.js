@@ -12,15 +12,17 @@ import * as compose from "./compose";
 import * as compose_pm_pill from "./compose_pm_pill";
 import * as compose_state from "./compose_state";
 import * as compose_ui from "./compose_ui";
+import * as compose_validate from "./compose_validate";
 import {$t} from "./i18n";
 import * as message_store from "./message_store";
-import * as muting from "./muting";
+import * as muted_users from "./muted_users";
 import {page_params} from "./page_params";
 import * as people from "./people";
 import * as rows from "./rows";
 import * as settings_data from "./settings_data";
 import * as stream_data from "./stream_data";
 import * as stream_topic_history from "./stream_topic_history";
+import * as stream_topic_history_util from "./stream_topic_history_util";
 import * as timerender from "./timerender";
 import * as typeahead_helper from "./typeahead_helper";
 import * as user_groups from "./user_groups";
@@ -68,6 +70,9 @@ export function topics_seen_for(stream_name) {
     if (!stream_id) {
         return [];
     }
+
+    // Fetch topic history from the server, in case we will need it soon.
+    stream_topic_history_util.get_server_history(stream_id, () => {});
     const topic_names = stream_topic_history.get_recent_topic_names(stream_id);
     return topic_names;
 }
@@ -186,9 +191,9 @@ export function handle_enter(textarea, e) {
 let nextFocus = false;
 
 function handle_keydown(e) {
-    const code = e.keyCode || e.which;
+    const key = e.key;
 
-    if (code === 13 || (code === 9 && !e.shiftKey)) {
+    if (key === "Enter" || (key === "Tab" && !e.shiftKey)) {
         // Enter key or Tab key
         let target_sel;
 
@@ -202,7 +207,7 @@ function handle_keydown(e) {
         const on_compose = target_sel === "#compose-textarea";
 
         if (on_compose) {
-            if (code === 9) {
+            if (key === "Tab") {
                 // This if branch is only here to make Tab+Enter work on Safari,
                 // which does not make <button>s tab-accessible by default
                 // (even if we were to set tabindex=0).
@@ -214,7 +219,10 @@ function handle_keydown(e) {
                 // Enter
                 if (should_enter_send(e)) {
                     e.preventDefault();
-                    if (!$("#compose-send-button").prop("disabled")) {
+                    if (
+                        compose_validate.warn_for_text_overflow_when_tries_to_send() &&
+                        !$("#compose-send-button").prop("disabled")
+                    ) {
                         $("#compose-send-button").prop("disabled", true);
                         compose.finish();
                     }
@@ -240,11 +248,9 @@ function handle_keydown(e) {
 }
 
 function handle_keyup(e) {
-    const code = e.keyCode || e.which;
-
     if (
         // Enter key or Tab key
-        (code === 13 || (code === 9 && !e.shiftKey)) &&
+        (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) &&
         nextFocus
     ) {
         nextFocus.trigger("focus");
@@ -352,7 +358,7 @@ function filter_mention_name(current_token) {
     } else if (current_token.startsWith("*")) {
         current_token = current_token.slice(1);
     }
-    if (current_token.length < 1 || current_token.lastIndexOf("*") !== -1) {
+    if (current_token.lastIndexOf("*") !== -1) {
         return false;
     }
 
@@ -407,10 +413,6 @@ export const slash_commands = [
         name: "poll",
     },
     {
-        text: $t({defaultMessage: "/settings (Load settings menu)"}),
-        name: "settings",
-    },
-    {
         text: $t({defaultMessage: "/todo (Create a todo list)"}),
         name: "todo",
     },
@@ -419,7 +421,6 @@ export const slash_commands = [
 export function filter_and_sort_mentions(is_silent, query, opts) {
     opts = {
         want_broadcast: !is_silent,
-        want_groups: !is_silent,
         filter_pills: false,
         ...opts,
     };
@@ -429,7 +430,6 @@ export function filter_and_sort_mentions(is_silent, query, opts) {
 export function get_pm_people(query) {
     const opts = {
         want_broadcast: false,
-        want_groups: true,
         filter_pills: true,
     };
     return get_person_suggestions(query, opts);
@@ -447,7 +447,7 @@ export function get_person_suggestions(query, opts) {
             persons = all_persons;
         }
         // Exclude muted users from typeaheads.
-        persons = muting.filter_muted_users(persons);
+        persons = muted_users.filter_muted_users(persons);
 
         if (opts.want_broadcast) {
             persons = persons.concat(broadcast_mentions());
@@ -456,13 +456,7 @@ export function get_person_suggestions(query, opts) {
         return persons.filter((item) => query_matches_person(query, item));
     }
 
-    let groups;
-
-    if (opts.want_groups) {
-        groups = user_groups.get_realm_user_groups();
-    } else {
-        groups = [];
-    }
+    const groups = user_groups.get_realm_user_groups();
 
     const filtered_groups = groups.filter((item) => query_matches_name_description(query, item));
 
@@ -500,14 +494,14 @@ export function get_person_suggestions(query, opts) {
         filtered_persons = filter_persons(people.get_realm_users());
     }
 
-    return typeahead_helper.sort_recipients(
-        filtered_persons,
+    return typeahead_helper.sort_recipients({
+        users: filtered_persons,
         query,
-        opts.stream,
-        opts.topic,
-        filtered_groups,
+        current_stream: opts.stream,
+        current_topic: opts.topic,
+        groups: filtered_groups,
         max_num_items,
-    );
+    });
 }
 
 export function get_stream_topic_data(hacky_this) {
@@ -654,7 +648,7 @@ export function get_candidates(query) {
             current_token = current_token.slice(1);
         }
         current_token = filter_mention_name(current_token);
-        if (!current_token) {
+        if (!current_token && typeof current_token === "boolean") {
             this.completing = null;
             return false;
         }
@@ -823,7 +817,9 @@ export function content_typeahead_selected(item, event) {
                 beginning = beginning.slice(0, -1);
             }
             if (user_groups.is_user_group(item)) {
-                beginning += "@*" + item.name + "* ";
+                let user_group_mention_text = is_silent ? "@_*" : "@*";
+                user_group_mention_text += item.name + "* ";
+                beginning += user_group_mention_text;
                 // We could theoretically warn folks if they are
                 // mentioning a user group that literally has zero
                 // members where we are posting to, but we don't have
@@ -994,6 +990,28 @@ export function compose_trigger_selection(event) {
     return false;
 }
 
+export function initialize_topic_edit_typeahead(form_field, stream_name, dropup) {
+    const options = {
+        fixed: true,
+        dropup,
+        highlighter(item) {
+            return typeahead_helper.render_typeahead_item({primary: item});
+        },
+        sorter(items) {
+            const sorted = typeahead_helper.sorter(this.query, items, (x) => x);
+            if (sorted.length > 0 && !sorted.includes(this.query)) {
+                sorted.unshift(this.query);
+            }
+            return sorted;
+        },
+        source() {
+            return topics_seen_for(stream_name);
+        },
+        items: 5,
+    };
+    form_field.typeahead(options);
+}
+
 function get_header_html() {
     let tip_text = "";
     switch (this.completing) {
@@ -1001,7 +1019,7 @@ function get_header_html() {
             tip_text = $t({defaultMessage: "Press > for list of topics"});
             break;
         case "silent_mention":
-            tip_text = $t({defaultMessage: "User will not be notified"});
+            tip_text = $t({defaultMessage: "Silent mentions do not trigger notifications."});
             break;
         case "syntax":
             if (page_params.realm_default_code_block_language !== null) {

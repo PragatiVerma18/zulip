@@ -50,7 +50,7 @@ def api_slack_incoming_webhook(
         for attachment in payload["attachments"]:
             body = add_attachment(attachment, body)
 
-    if body == "" and "text" in payload:
+    if body == "" and "text" in payload and payload["text"] is not None:
         body += payload["text"]
         if "icon_emoji" in payload and payload["icon_emoji"] is not None:
             body = "{} {}".format(payload["icon_emoji"], body)
@@ -99,5 +99,5 @@ def replace_formatting(text: str) -> str:
     text = re.sub(r"([^\w])\*(?!\s+)([^\*^\n]+)(?<!\s)\*([^\w])", r"\1**\2**\3", text)
 
     # Slack uses _text_ for emphasis, whereas Zulip interprets that as nothing
-    text = re.sub(r"([^\w])[_](?!\s+)([^\_\^\n]+)(?<!\s)[_]([^\w])", r"\1**\2**\3", text)
+    text = re.sub(r"([^\w])[_](?!\s+)([^\_\^\n]+)(?<!\s)[_]([^\w])", r"\1*\2*\3", text)
     return text

@@ -8,12 +8,13 @@ from unittest.mock import MagicMock, call, patch
 from django.apps import apps
 from django.conf import settings
 from django.core.management import call_command, find_commands
+from django.core.management.base import CommandError
 from django.test import override_settings
 from django.utils.timezone import now as timezone_now
 
 from confirmation.models import RealmCreationKey, generate_realm_creation_url
 from zerver.lib.actions import do_add_reaction, do_create_user
-from zerver.lib.management import CommandError, ZulipBaseCommand, check_config
+from zerver.lib.management import ZulipBaseCommand, check_config
 from zerver.lib.test_classes import ZulipTestCase
 from zerver.lib.test_helpers import most_recent_message, stdout_suppressed
 from zerver.models import (
@@ -478,6 +479,19 @@ class TestInvoicePlans(ZulipTestCase):
 
     def test_if_command_calls_invoice_plans_as_needed(self) -> None:
         with patch("zilencer.management.commands.invoice_plans.invoice_plans_as_needed") as m:
+            call_command(self.COMMAND_NAME)
+
+        m.assert_called_once()
+
+
+@skipUnless(settings.ZILENCER_ENABLED, "requires zilencer")
+class TestDowngradeSmallRealmsBehindOnPayments(ZulipTestCase):
+    COMMAND_NAME = "downgrade_small_realms_behind_on_payments"
+
+    def test_if_command_calls_downgrade_small_realms_behind_on_payments_as_needed(self) -> None:
+        with patch(
+            "zilencer.management.commands.downgrade_small_realms_behind_on_payments.downgrade_small_realms_behind_on_payments_as_needed"
+        ) as m:
             call_command(self.COMMAND_NAME)
 
         m.assert_called_once()

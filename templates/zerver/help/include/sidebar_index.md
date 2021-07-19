@@ -37,6 +37,7 @@
 * [Mention a user or group](/help/mention-a-user-or-group)
 * [Edit or delete a message](/help/edit-or-delete-a-message)
 * [Message a stream by email](/help/message-a-stream-by-email)
+* [Code blocks](/help/code-blocks)
 * [Add GIFs in your message](/help/animated-gifs-from-giphy)
 * [Create a poll](/help/create-a-poll)
 
@@ -68,8 +69,9 @@
 * [Change the color of a stream](/help/change-the-color-of-a-stream)
 * [Message a stream by email](/help/message-a-stream-by-email)
 * [Start a new topic](/help/start-a-new-topic)
-* [Change the topic of a message](/help/change-the-topic-of-a-message)
 * [Rename a topic](/help/rename-a-topic)
+* [Resolve a topic](/help/resolve-a-topic)
+* [Move content to another topic](/help/move-content-to-another-topic)
 * [Manage inactive streams](/help/manage-inactive-streams)
 
 ## Notifications
@@ -77,6 +79,7 @@
 * [PMs, mentions, and alerts](/help/pm-mention-alert-notifications)
 * [Mute a stream](/help/mute-a-stream)
 * [Mute a topic](/help/mute-a-topic)
+* [Mute a user](/help/mute-a-user)
 * [Alert words](/help/add-an-alert-word)
 * [Disable new login emails](/help/disable-new-login-emails)
 * [Configure message notification emails](/help/configure-message-notification-emails)
@@ -131,7 +134,7 @@
 * [Disable message edit history](/help/disable-message-edit-history)
 * [Manage editing of old messages](/help/configure-message-editing-and-deletion)
 * [Hide message content in emails](/help/hide-message-content-in-emails)
-* [Community topic edits](/help/community-topic-edits)
+* [Restrict topic editing](/help/configure-who-can-edit-topics)
 * [Weekly digest emails](/help/digest-emails)
 * [Disable welcome emails](/help/disable-welcome-emails)
 * [Configure notification bot](/help/configure-notification-bot)
@@ -140,7 +143,6 @@
 * [Add custom emoji](/help/add-custom-emoji)
 * [Configure authentication methods](/help/configure-authentication-methods)
 * [Add a custom linkifier](/help/add-a-custom-linkifier)
-* [Add a custom playground](/help/add-a-custom-playground)
 * [Message retention policy](/help/message-retention-policy)
 * [SAML authentication](/help/saml-authentication)
 
@@ -160,6 +162,7 @@
 
 ## Stream management
 * [Stream permissions](/help/stream-permissions)
+* [Move content to another stream](/help/move-content-to-another-stream)
 * [Delete or archive a stream](/help/archive-a-stream)
 * [Delete a topic](/help/delete-a-topic)
 * [Set default streams for new users](/help/set-default-streams-for-new-users)

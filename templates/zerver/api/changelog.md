@@ -1,6 +1,7 @@
-# Changelog
+# API Changelog
 
-This page documents changes to the Zulip Server API over time.
+This page documents changes to the Zulip Server API over time. See also
+the [Zulip server changelog][server-changelog].
 
 The recommended way for a client like the Zulip mobile or desktop apps
 that needs to support interaction with a wide range of different Zulip
@@ -8,7 +9,113 @@ server versions is to check the `zulip_feature_level` parameter in the
 `/register` and `/server_settings` responses to determine which of the
 below features are supported.
 
+## Changes in Zulip 5.0
+
+**Feature level 79**
+
+* [`GET /users/me/subscriptions`](/api/get-subscriptions): The
+  `subscribers` field now returns user IDs if `include_subscribers` is
+  passed. Previously, this endpoint returned user display email
+  addresses in this field.
+* `GET /streams/{stream_id}/members`: This endpoint now returns user
+  IDs. Previously, it returned display email addresses.
+
+**Feature level 78**
+
+* `PATCH /settings`: Added `ignored_parameters_unsupported` field,
+  which is a list of parameters that were ignored by the endpoint,
+  to the response object.
+
+* `PATCH /settings`: Removed `full_name` and `account_email` fields
+  from the response object.
+
+**Feature level 77**
+
+* [`GET /events`](/api/get-events): Removed `recipient_id` and
+  `sender_id` field in responses of `delete_message` event when
+  `message_type` is `private`.
+
+**Feature level 76**
+
+* [`POST /fetch_api_key`](/api/fetch-api-key), [`POST
+  /dev_fetch_api_key`](/api/dev-fetch-api-key): The HTTP status for
+  authentication errors is now 401. This was previously 403.
+* All API endpoints now use the HTTP 401 error status for API requests
+  involving a deactivated user or realm. This was previously 403.
+* Mobile push notifications now include the `mentioned_user_group_id`
+  and `mentioned_user_group_name` fields when a user group containing
+  the user is mentioned.  Previously, these were indistinguishable
+  from personal mentions (as both types have `trigger="mention"`).
+
+**Feature level 75**
+
+* [`POST /register`](/api/register-queue), `PATCH /realm`: Replaced `allow_community_topic_editing`
+  field with an integer field `edit_topic_policy`.
+
+**Feature level 74**
+
+* [`POST /register`](/api/register-queue): Added `server_needs_upgrade`
+  and `event_queue_longpoll_timeout_seconds` field when fetching
+  realm data.
+
+**Feature level 73**
+
+* [`GET /users`](/api/get-users), [`GET /users/{user_id}`](/api/get-user),
+  [`GET /users/{email}`](/api/get-user-by-email) and
+  [`GET /users/me`](/api/get-own-user): Added `is_billing_admin` field to
+  returned user objects.
+* [`GET /events`](/api/get-events): Added `is_billing_admin` field to
+  user objects sent in `realm_user` events.
+* [`POST /register`](/api/register-queue): Added `is_billing_admin` field
+  in the user objects returned in the `realm_users` field.
+
+**Feature level 72**
+
+* [`POST /register`](/api/register-queue): Renamed `max_icon_file_size` to
+  `max_icon_file_size_mib`, `realm_upload_quota` to `realm_upload_quota_mib`
+  and `max_logo_file_size` to `max_logo_file_size_mib`.
+
+**Feature level 71**
+
+* [`GET /events`](/api/get-events): Added `is_web_public` field to
+  `stream` events changing `invite_only`.
+
+**Feature level 70**
+
+* [`POST /register`](/api/register-queue): Added new top-level
+  `server_timestamp` field when fetching presence data, to match the
+  existing presence API.
+
+Feature levels 66-69 are reserved for future use in 4.x maintenance
+releases.
+
 ## Changes in Zulip 4.0
+
+**Feature level 65**
+
+No changes; feature level used for Zulip 4.0 release.
+
+**Feature level 64**
+
+* `PATCH /streams/{stream_id}`: Removed unnecessary JSON-encoding of string
+  parameters `new_name` and `description`.
+* `PATCH /settings/display`: Removed unnecessary JSON-encoding of string
+  parameters `default_view`, `emojiset` and `timezone`.
+
+**Feature level 63**
+
+* `PATCH /settings/notifications`: Removed unnecessary JSON-encoding of string
+  parameter `notification_sound`.
+* `PATCH /settings/display`: Removed unnecessary JSON-encoding of string
+  parameter `default_language`.
+* `POST /users/me/tutorial_status`: Removed unnecessary JSON-encoding of string
+  parameter `status`.
+* `POST /realm/domains`: Removed unnecessary JSON-encoding of string
+  parameter `domain`.
+* `PATCH /default_stream_groups/{user_id}`: Removed unnecessary JSON-encoding of string
+  parameters `new_group_name` and `new_description`.
+* `POST /users/me/hotspots`: Removed unnecessary JSON-encoding of string
+  parameter `hotspot`.
 
 **Feature level 62**
 
@@ -113,14 +220,14 @@ field with an integer field `invite_to_realm_policy`.
 
 **Feature level 49**
 
-* Added new [`POST /realm/playground`](/api/add-playground) and
-  [`DELETE /realm/playground/{playground_id}`](/api/remove-playground)
-  endpoints for realm playgrounds.
+* Added new [`POST /realm/playground`](/api/add-code-playground) and
+  [`DELETE /realm/playground/{playground_id}`](/api/remove-code-playground)
+  endpoints for code playgrounds.
 * [`GET /events`](/api/get-events): A new `realm_playgrounds` events
-  is sent when changes are made to a set of configured playgrounds for
+  is sent when changes are made to a set of configured code playgrounds for
   an organization.
 * [`POST /register`](/api/register-queue): Added a new `realm_playgrounds`
-  field, which is required to fetch the set of configured playgrounds for
+  field, which is required to fetch the set of configured code playgrounds for
   an organization.
 
 **Feature level 48**
@@ -197,6 +304,8 @@ field with an integer field `invite_to_realm_policy`.
 
 * [`POST /users`](/api/create-user): Restricted access to organization
   administrators with the `can_create_users` permission.
+* [Error handling](/api/rest-error-handling): The `code` property will
+  not be present in errors due to rate limits.
 
 **Feature level 35**
 
@@ -557,3 +666,5 @@ No changes; feature level used for Zulip 3.0 release.
 * [`POST /register`](/api/register-queue): Added `slim_presence`
   parameter.  Changes the format of presence events, but is still
   being changed and should not be used by clients.
+
+[server-changelog]: https://zulip.readthedocs.io/en/latest/overview/changelog.html

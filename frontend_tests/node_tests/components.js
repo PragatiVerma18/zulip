@@ -5,8 +5,9 @@ const {strict: assert} = require("assert");
 const _ = require("lodash");
 
 const {$t} = require("../zjsunit/i18n");
-const {mock_cjs, zrequire} = require("../zjsunit/namespace");
+const {mock_jquery, zrequire} = require("../zjsunit/namespace");
 const {run_test} = require("../zjsunit/test");
+const blueslip = require("../zjsunit/zblueslip");
 
 let env;
 
@@ -115,7 +116,7 @@ function make_switcher() {
     return self;
 }
 
-mock_cjs("jquery", (sel, attributes) => {
+mock_jquery((sel, attributes) => {
     if (sel.stub) {
         // The component often redundantly re-wraps objects.
         return sel;
@@ -162,8 +163,8 @@ const components = zrequire("components");
 
 const noop = () => {};
 
-const LEFT_KEY = {which: 37, preventDefault: noop, stopPropagation: noop};
-const RIGHT_KEY = {which: 39, preventDefault: noop, stopPropagation: noop};
+const LEFT_KEY = {key: "ArrowLeft", preventDefault: noop, stopPropagation: noop};
+const RIGHT_KEY = {key: "ArrowRight", preventDefault: noop, stopPropagation: noop};
 
 run_test("basics", () => {
     env = {
@@ -281,4 +282,9 @@ run_test("basics", () => {
     assert.equal(env.focused_tab, 0);
     widget.goto("search-operators");
     assert.equal(env.focused_tab, 0);
+
+    blueslip.expect("warn", "Incorrect tab name given.", 3);
+    widget.disable_tab("incorrect-tab");
+    widget.enable_tab("incorrect-tab");
+    widget.goto("incorrect-tab");
 });

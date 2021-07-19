@@ -1,4 +1,6 @@
 import datetime
+import random
+from typing import Sequence
 from unittest import mock
 
 import pytz
@@ -6,10 +8,12 @@ from django.conf import settings
 from django.core import mail
 from django.test import override_settings
 
+from corporate.lib.stripe import get_latest_seat_count
 from zerver.lib.actions import do_change_notification_settings, notify_new_user
 from zerver.lib.initial_password import initial_password
+from zerver.lib.streams import create_stream_if_needed
 from zerver.lib.test_classes import ZulipTestCase
-from zerver.models import Realm, Recipient, Stream
+from zerver.models import Message, Realm, Recipient, Stream, UserProfile, get_realm
 from zerver.signals import JUST_CREATED_THRESHOLD, get_device_browser, get_device_os
 
 
@@ -52,7 +56,7 @@ class SendLoginEmailTest(ZulipTestCase):
                 )
 
             # email is sent and correct subject
-            self.assertEqual(len(mail.outbox), 1)
+            self.assert_length(mail.outbox, 1)
             subject = "New login from Firefox on Windows"
             self.assertEqual(mail.outbox[0].subject, subject)
             # local time is correct and in email's body
@@ -75,7 +79,7 @@ class SendLoginEmailTest(ZulipTestCase):
         user = self.example_user("hamlet")
         self.login_user(user)
 
-        self.assertEqual(len(mail.outbox), 0)
+        self.assert_length(mail.outbox, 0)
 
     def test_dont_send_login_emails_for_new_user_registration_logins(self) -> None:
         with self.settings(SEND_LOGIN_EMAILS=True):
@@ -83,7 +87,7 @@ class SendLoginEmailTest(ZulipTestCase):
 
             # Verify that there's just 1 email for new user registration.
             self.assertEqual(mail.outbox[0].subject, "Activate your Zulip account")
-            self.assertEqual(len(mail.outbox), 1)
+            self.assert_length(mail.outbox, 1)
 
     def test_without_path_info_dont_send_login_emails_for_new_user_registration_logins(
         self,
@@ -109,13 +113,13 @@ class SendLoginEmailTest(ZulipTestCase):
         self.assertFalse(user.enable_login_emails)
         with mock.patch("zerver.signals.timezone_now", return_value=mock_time):
             self.login_user(user)
-        self.assertEqual(len(mail.outbox), 0)
+        self.assert_length(mail.outbox, 0)
 
         do_change_notification_settings(user, "enable_login_emails", True, acting_user=None)
         self.assertTrue(user.enable_login_emails)
         with mock.patch("zerver.signals.timezone_now", return_value=mock_time):
             self.login_user(user)
-        self.assertEqual(len(mail.outbox), 1)
+        self.assert_length(mail.outbox, 1)
 
 
 class TestBrowserAndOsUserAgentStrings(ZulipTestCase):
@@ -236,14 +240,38 @@ class TestBrowserAndOsUserAgentStrings(ZulipTestCase):
 
 
 class TestNotifyNewUser(ZulipTestCase):
-    def test_notify_realm_of_new_user(self) -> None:
-        new_user = self.example_user("cordelia")
-        stream = self.make_stream(Realm.INITIAL_PRIVATE_STREAM_NAME)
-        new_user.realm.signup_notifications_stream_id = stream.id
-        new_user.realm.save()
-        new_user = self.example_user("cordelia")
-        notify_new_user(new_user)
+    def get_message_count(self) -> int:
+        return Message.objects.all().count()
 
+    def test_notify_realm_of_new_user(self) -> None:
+        realm = get_realm("zulip")
+        new_user = self.example_user("cordelia")
+        admin_realm = get_realm("zulipinternal")
+        admin_realm_signups_stream, created = create_stream_if_needed(admin_realm, "signups")
+        message_count = self.get_message_count()
+
+        notify_new_user(new_user)
+        self.assertEqual(self.get_message_count(), message_count + 2)
+        message = self.get_second_to_last_message()
+        self.assertEqual(message.recipient.type, Recipient.STREAM)
+        actual_stream = Stream.objects.get(id=message.recipient.type_id)
+        self.assertEqual(actual_stream.name, Realm.INITIAL_PRIVATE_STREAM_NAME)
+        self.assertIn(
+            f"@_**Cordelia, Lear's daughter|{new_user.id}** just signed up for Zulip.",
+            message.content,
+        )
+        message = self.get_last_message()
+        self.assertEqual(message.recipient.type, Recipient.STREAM)
+        actual_stream = Stream.objects.get(id=message.recipient.type_id)
+        self.assertEqual(actual_stream.name, "signups")
+        self.assertIn(
+            f"Cordelia, Lear's daughter <`{new_user.email}`> just signed up for Zulip. (total:",
+            message.content,
+        )
+
+        admin_realm_signups_stream.delete()
+        notify_new_user(new_user)
+        self.assertEqual(self.get_message_count(), message_count + 3)
         message = self.get_last_message()
         self.assertEqual(message.recipient.type, Recipient.STREAM)
         actual_stream = Stream.objects.get(id=message.recipient.type_id)
@@ -251,4 +279,73 @@ class TestNotifyNewUser(ZulipTestCase):
         self.assertIn(
             f"@_**Cordelia, Lear's daughter|{new_user.id}** just signed up for Zulip.",
             message.content,
+        )
+        realm.signup_notifications_stream = None
+        realm.save(update_fields=["signup_notifications_stream"])
+        new_user.refresh_from_db()
+        notify_new_user(new_user)
+        self.assertEqual(self.get_message_count(), message_count + 3)
+
+    def test_notify_realm_of_new_user_in_manual_license_management(self) -> None:
+        realm = get_realm("zulip")
+
+        user_count = get_latest_seat_count(realm)
+        self.subscribe_realm_to_monthly_plan_on_manual_license_management(
+            realm, user_count + 5, user_count + 5
+        )
+
+        def create_new_user_and_verify_strings_in_notification_message(
+            strings_present: Sequence[str] = [], strings_absent: Sequence[str] = []
+        ) -> None:
+            user_no = random.randrange(100000)
+            new_user = UserProfile.objects.create(
+                realm=realm,
+                full_name=f"new user {user_no}",
+                email=f"user-{user_no}-email@zulip.com",
+                delivery_email=f"user-{user_no}-delivery-email@zulip.com",
+            )
+            notify_new_user(new_user)
+
+            message = self.get_last_message()
+            actual_stream = Stream.objects.get(id=message.recipient.type_id)
+            self.assertEqual(actual_stream, realm.signup_notifications_stream)
+            self.assertIn(
+                f"@_**new user {user_no}|{new_user.id}** just signed up for Zulip.",
+                message.content,
+            )
+            for string_present in strings_present:
+                self.assertIn(
+                    string_present,
+                    message.content,
+                )
+            for string_absent in strings_absent:
+                self.assertNotIn(string_absent, message.content)
+
+        create_new_user_and_verify_strings_in_notification_message(
+            strings_absent=["Your organization has"]
+        )
+        create_new_user_and_verify_strings_in_notification_message(
+            strings_present=[
+                "Your organization has only three Zulip licenses remaining",
+                "to allow more than three users to",
+            ],
+        )
+        create_new_user_and_verify_strings_in_notification_message(
+            strings_present=[
+                "Your organization has only two Zulip licenses remaining",
+                "to allow more than two users to",
+            ],
+        )
+
+        create_new_user_and_verify_strings_in_notification_message(
+            strings_present=[
+                "Your organization has only one Zulip license remaining",
+                "to allow more than one user to",
+            ],
+        )
+        create_new_user_and_verify_strings_in_notification_message(
+            strings_present=[
+                "Your organization has no Zulip licenses remaining",
+                "to allow new users to",
+            ]
         )

@@ -118,7 +118,7 @@ export const update_elements = (content) => {
         if (user_group_id && !$(this).find(".highlight").length) {
             // Edit the mention to show the current name for the
             // user group, if its not in search.
-            $(this).text("@" + user_group.name);
+            set_name_in_mention_element(this, user_group.name);
         }
     });
 
@@ -169,7 +169,7 @@ export const update_elements = (content) => {
                 text: rendered_time.text,
             });
             $(this).html(rendered_timestamp);
-            $(this).attr("title", rendered_time.title);
+            $(this).attr("data-tippy-content", rendered_time.tooltip_content);
         } else {
             // This shouldn't happen. If it does, we're very interested in debugging it.
             blueslip.error(`Could not parse datetime supplied by backend: ${time_str}`);
@@ -204,9 +204,8 @@ export const update_elements = (content) => {
         const $pre = $codehilite.find("pre");
         const fenced_code_lang = $codehilite.data("code-language");
         if (fenced_code_lang !== undefined) {
-            const playground_info = realm_playground.get_playground_info_for_languages(
-                fenced_code_lang,
-            );
+            const playground_info =
+                realm_playground.get_playground_info_for_languages(fenced_code_lang);
             if (playground_info !== undefined) {
                 // If a playground is configured for this language,
                 // offer to view the code in that playground.  When

@@ -64,7 +64,7 @@ export const DropdownListWidget = function ({
             function (e) {
                 const setting_elem = $(this).closest(`.${CSS.escape(widget_name)}_setting`);
                 if (e.type === "keypress") {
-                    if (e.which === 13) {
+                    if (e.key === "Enter") {
                         setting_elem.find(".dropdown-menu").dropdown("toggle");
                     } else {
                         return;
@@ -119,18 +119,28 @@ export const DropdownListWidget = function ({
             // On opening a Bootstrap Dropdown, the parent element receives focus.
             // Here, we want our search input to have focus instead.
             e.preventDefault();
-            search_input.trigger("focus");
+            // This function gets called twice when focusing the
+            // dropdown, and only in the second call is the input
+            // field visible in the DOM; so the following visibility
+            // check ensures we wait for the second call to focus.
+            if (dropdown_list_body.is(":visible")) {
+                search_input.trigger("focus");
+            }
         });
 
         search_input.on("keydown", (e) => {
-            if (!/(38|40|27)/.test(e.keyCode)) {
+            const {key, keyCode, which} = e;
+            const navigation_keys = ["ArrowUp", "ArrowDown", "Escape"];
+            if (!navigation_keys.includes(key)) {
                 return;
             }
             e.preventDefault();
-            const custom_event = new $.Event("keydown.dropdown.data-api", {
-                keyCode: e.keyCode,
-                which: e.keyCode,
-            });
+            e.stopPropagation();
+
+            // We pass keyCode instead of key here because the outdated
+            // bootstrap library we have at static/third/ still uses the
+            // deprecated keyCode & which properties.
+            const custom_event = new $.Event("keydown.dropdown.data-api", {keyCode, which});
             dropdown_toggle.trigger(custom_event);
         });
 

@@ -17,6 +17,7 @@ from version import (
 from zerver.lib.exceptions import InvalidSubdomainError
 from zerver.lib.realm_description import get_realm_rendered_description, get_realm_text_description
 from zerver.lib.realm_icon import get_realm_icon_url
+from zerver.lib.request import get_request_notes
 from zerver.lib.send_email import FromAddress
 from zerver.lib.subdomains import get_subdomain
 from zerver.models import Realm, UserProfile, get_realm
@@ -30,7 +31,7 @@ from zproject.backends import (
 )
 
 DEFAULT_PAGE_PARAMS = {
-    "debug_mode": settings.DEBUG,
+    "development_environment": settings.DEVELOPMENT,
     "webpack_public_path": staticfiles_storage.url(settings.WEBPACK_BUNDLES),
 }
 
@@ -49,27 +50,23 @@ def common_context(user: UserProfile) -> Dict[str, Any]:
     }
 
 
-def get_zulip_version_name(zulip_version: str) -> str:
-    if zulip_version.endswith("+git"):
-        return "Zulip " + zulip_version[:-4]
-
-    return "Zulip " + zulip_version
-
-
 def get_realm_from_request(request: HttpRequest) -> Optional[Realm]:
+    request_notes = get_request_notes(request)
     if hasattr(request, "user") and hasattr(request.user, "realm"):
         return request.user.realm
-    if not hasattr(request, "realm"):
-        # We cache the realm object from this function on the request,
+    if not request_notes.has_fetched_realm:
+        # We cache the realm object from this function on the request data,
         # so that functions that call get_realm_from_request don't
         # need to do duplicate queries on the same realm while
         # processing a single request.
         subdomain = get_subdomain(request)
+        request_notes = get_request_notes(request)
         try:
-            request.realm = get_realm(subdomain)
+            request_notes.realm = get_realm(subdomain)
         except Realm.DoesNotExist:
-            request.realm = None
-    return request.realm
+            request_notes.realm = None
+        request_notes.has_fetched_realm = True
+    return request_notes.realm
 
 
 def get_valid_realm_from_request(request: HttpRequest) -> Realm:
@@ -77,6 +74,12 @@ def get_valid_realm_from_request(request: HttpRequest) -> Realm:
     if realm is None:
         raise InvalidSubdomainError()
     return realm
+
+
+def get_apps_page_url() -> str:
+    if settings.ZILENCER_ENABLED:
+        return "/apps/"
+    return "https://zulip.com/apps/"
 
 
 def zulip_default_context(request: HttpRequest) -> Dict[str, Any]:
@@ -113,10 +116,6 @@ def zulip_default_context(request: HttpRequest) -> Dict[str, Any]:
         find_team_link_disabled = False
         allow_search_engine_indexing = True
 
-    apps_page_url = "https://zulip.com/apps/"
-    if settings.ZILENCER_ENABLED:
-        apps_page_url = "/apps/"
-
     apps_page_web = settings.ROOT_DOMAIN_URI + "/accounts/go/"
 
     user_is_authenticated = False
@@ -142,8 +141,6 @@ def zulip_default_context(request: HttpRequest) -> Dict[str, Any]:
         "request_language": get_language(),
     }
 
-    ZULIP_VERSION_NAME = get_zulip_version_name(ZULIP_VERSION)
-
     context = {
         "root_domain_landing_page": settings.ROOT_DOMAIN_LANDING_PAGE,
         "custom_logo_url": settings.CUSTOM_LOGO_URL,
@@ -159,7 +156,7 @@ def zulip_default_context(request: HttpRequest) -> Dict[str, Any]:
         "realm_name": realm_name,
         "realm_icon": realm_icon,
         "root_domain_uri": settings.ROOT_DOMAIN_URI,
-        "apps_page_url": apps_page_url,
+        "apps_page_url": get_apps_page_url(),
         "apps_page_web": apps_page_web,
         "open_realm_creation": settings.OPEN_REALM_CREATION,
         "development_environment": settings.DEVELOPMENT,
@@ -169,12 +166,11 @@ def zulip_default_context(request: HttpRequest) -> Dict[str, Any]:
         "password_min_length": settings.PASSWORD_MIN_LENGTH,
         "password_min_guesses": settings.PASSWORD_MIN_GUESSES,
         "zulip_version": ZULIP_VERSION,
-        "zulip_version_name": ZULIP_VERSION_NAME,
         "user_is_authenticated": user_is_authenticated,
         "settings_path": settings_path,
         "secrets_path": secrets_path,
         "settings_comments_path": settings_comments_path,
-        "platform": request.client_name,
+        "platform": get_request_notes(request).client_name,
         "allow_search_engine_indexing": allow_search_engine_indexing,
         "landing_page_navbar_message": settings.LANDING_PAGE_NAVBAR_MESSAGE,
         "default_page_params": default_page_params,

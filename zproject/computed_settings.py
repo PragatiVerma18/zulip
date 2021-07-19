@@ -1,11 +1,13 @@
 import os
 import sys
 import time
+import warnings
 from copy import deepcopy
 from pathlib import PosixPath
 from typing import Any, Dict, List, Tuple, Union
 from urllib.parse import urljoin
 
+from cryptography.utils import CryptographyDeprecationWarning
 from django.template.loaders import app_directories
 
 import zerver.lib.logging_util
@@ -279,8 +281,8 @@ SILENCED_SYSTEM_CHECKS = [
 DATABASES: Dict[str, Dict[str, Any]] = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "zulip",
-        "USER": "zulip",
+        "NAME": get_config("postgresql", "database_name", "zulip"),
+        "USER": get_config("postgresql", "database_user", "zulip"),
         # Password = '' => peer/certificate authentication (no password)
         "PASSWORD": "",
         # Host = '' => connect to localhost by default
@@ -312,7 +314,12 @@ elif REMOTE_POSTGRES_HOST != "":
         DATABASES["default"]["OPTIONS"]["sslmode"] = REMOTE_POSTGRES_SSLMODE
     else:
         DATABASES["default"]["OPTIONS"]["sslmode"] = "verify-full"
-
+elif get_config("postgresql", "database_user") != "zulip":
+    if get_secret("postgres_password") is not None:
+        DATABASES["default"].update(
+            PASSWORD=get_secret("postgres_password"),
+            HOST="localhost",
+        )
 POSTGRESQL_MISSING_DICTIONARIES = bool(get_config("postgresql", "missing_dictionaries", None))
 
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
@@ -368,6 +375,12 @@ RATE_LIMITING_RULES = {
     "api_by_user": [
         (60, 200),  # 200 requests max every minute
     ],
+    "api_by_ip": [
+        (60, 100),
+    ],
+    "api_by_remote_server": [
+        (60, 1000),
+    ],
     "authenticate_by_username": [
         (1800, 5),  # 5 login attempts within 30 minutes
     ],
@@ -382,7 +395,7 @@ RATE_LIMITING_RULES = {
 # which has its own buckets separate from the default backend.
 # In principle, it should be impossible to make requests to tornado that fall into
 # other domains, but we use this list as an extra precaution.
-RATE_LIMITING_DOMAINS_FOR_TORNADO = ["api_by_user"]
+RATE_LIMITING_DOMAINS_FOR_TORNADO = ["api_by_user", "api_by_ip"]
 
 # These ratelimits are also documented publicly at
 # https://zulip.readthedocs.io/en/latest/production/email-gateway.html
@@ -695,7 +708,7 @@ WEBHOOK_LOG_PATH = zulip_path("/var/log/zulip/webhooks_errors.log")
 WEBHOOK_UNSUPPORTED_EVENTS_LOG_PATH = zulip_path("/var/log/zulip/webhooks_unsupported_events.log")
 SOFT_DEACTIVATION_LOG_PATH = zulip_path("/var/log/zulip/soft_deactivation.log")
 TRACEMALLOC_DUMP_DIR = zulip_path("/var/log/zulip/tracemalloc")
-SCHEDULED_MESSAGE_DELIVERER_LOG_PATH = zulip_path("/var/log/zulip/scheduled_message_deliverer.log")
+DELIVER_SCHEDULED_MESSAGES_LOG_PATH = zulip_path("/var/log/zulip/deliver_scheduled_messages.log")
 RETENTION_LOG_PATH = zulip_path("/var/log/zulip/message_retention.log")
 AUTH_LOG_PATH = zulip_path("/var/log/zulip/auth.log")
 
@@ -911,7 +924,7 @@ LOGGING: Dict[str, Any] = {
         "zerver.lib.digest": {
             "level": "DEBUG",
         },
-        "zerver.management.commands.deliver_email": {
+        "zerver.management.commands.deliver_scheduled_emails": {
             "level": "DEBUG",
         },
         "zerver.management.commands.enqueue_digest_emails": {
@@ -969,6 +982,11 @@ LOGGING: Dict[str, Any] = {
     },
 }
 
+# Silence CryptographyDeprecationWarning spam from a dependency:
+# /srv/zulip-py3-venv/lib/python3.6/site-packages/jose/backends/cryptography_backend.py:18: CryptographyDeprecationWarning: int_from_bytes is deprecated, use int.from_bytes instead
+# TODO: Clean this up when possible after future dependency upgrades.
+warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning, module="jose.*")
+
 if DEVELOPMENT:
     CONTRIBUTOR_DATA_FILE_PATH = os.path.join(DEPLOY_ROOT, "var/github-contributors.json")
 else:
@@ -976,12 +994,12 @@ else:
 
 LOGIN_REDIRECT_URL = "/"
 
-# Client-side polling timeout for get_events, in milliseconds.
+# Client-side polling timeout for get_events, in seconds.
 # We configure this here so that the client test suite can override it.
 # We already kill the connection server-side with heartbeat events,
 # but it's good to have a safety.  This value should be greater than
 # (HEARTBEAT_MIN_FREQ_SECS + 10)
-POLL_TIMEOUT = 90 * 1000
+EVENT_QUEUE_LONGPOLL_TIMEOUT_SECONDS = 90
 
 ########################################################################
 # SSO AND LDAP SETTINGS
@@ -1160,8 +1178,6 @@ CROSS_REALM_BOT_EMAILS = {
     "emailgateway@zulip.com",
 }
 
-THUMBOR_KEY = get_secret("thumbor_key")
-
 TWO_FACTOR_PATCH_ADMIN = False
 
 # Allow the environment to override the default DSN
@@ -1169,4 +1185,4 @@ SENTRY_DSN = os.environ.get("SENTRY_DSN", SENTRY_DSN)
 if SENTRY_DSN:
     from .sentry import setup_sentry
 
-    setup_sentry(SENTRY_DSN)
+    setup_sentry(SENTRY_DSN, get_config("machine", "deploy_type", "development"))

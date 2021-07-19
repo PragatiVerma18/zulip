@@ -1,7 +1,7 @@
 import $ from "jquery";
 
-import render_confirm_unstar_all_messages from "../templates/confirm_unstar_all_messages.hbs";
-import render_confirm_unstar_all_messages_in_topic from "../templates/confirm_unstar_all_messages_in_topic.hbs";
+import render_confirm_unstar_all_messages from "../templates/confirm_dialog/confirm_unstar_all_messages.hbs";
+import render_confirm_unstar_all_messages_in_topic from "../templates/confirm_dialog/confirm_unstar_all_messages_in_topic.hbs";
 
 import * as confirm_dialog from "./confirm_dialog";
 import {$t_html} from "./i18n";
@@ -16,7 +16,6 @@ export function confirm_unstar_all_messages() {
         parent: modal_parent,
         html_heading: $t_html({defaultMessage: "Unstar all messages"}),
         html_body,
-        html_yes_button: $t_html({defaultMessage: "Confirm"}),
         on_click: message_flags.unstar_all_messages,
     });
 }
@@ -41,7 +40,6 @@ export function confirm_unstar_all_messages_in_topic(stream_id, topic) {
         parent: modal_parent,
         html_heading: $t_html({defaultMessage: "Unstar messages in topic"}),
         html_body,
-        html_yes_button: $t_html({defaultMessage: "Confirm"}),
         on_click,
     });
 }

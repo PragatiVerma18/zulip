@@ -15,12 +15,13 @@ import * as narrow from "./narrow";
 import * as navigate from "./navigate";
 import * as overlays from "./overlays";
 import {page_params} from "./page_params";
-import * as recent_topics from "./recent_topics";
+import * as recent_topics_ui from "./recent_topics_ui";
+import * as recent_topics_util from "./recent_topics_util";
 import * as search from "./search";
 import * as settings from "./settings";
 import * as settings_panel_menu from "./settings_panel_menu";
 import * as settings_toggle from "./settings_toggle";
-import * as subs from "./subs";
+import * as stream_settings_ui from "./stream_settings_ui";
 import * as top_left_corner from "./top_left_corner";
 import * as ui_util from "./ui_util";
 
@@ -58,15 +59,11 @@ function set_hash(hash) {
 }
 
 function maybe_hide_recent_topics() {
-    if (recent_topics.is_visible()) {
-        recent_topics.hide();
+    if (recent_topics_util.is_visible()) {
+        recent_topics_ui.hide();
         return true;
     }
     return false;
-}
-
-export function in_recent_topics_hash() {
-    return ["#recent_topics"].includes(window.location.hash);
 }
 
 export function changehash(newhash) {
@@ -86,7 +83,7 @@ export function save_narrow(operators) {
     changehash(new_hash);
 }
 
-function activate_home_tab() {
+function show_all_message_view() {
     const coming_from_recent_topics = maybe_hide_recent_topics();
     ui_util.change_tab_to("#message_feed_container");
     narrow.deactivate(coming_from_recent_topics);
@@ -98,8 +95,29 @@ function activate_home_tab() {
     setTimeout(navigate.maybe_scroll_to_selected, 0);
 }
 
-export function show_default_view() {
-    window.location.hash = page_params.default_view;
+export function set_hash_to_default_view() {
+    window.location.hash = "";
+}
+
+function show_default_view() {
+    // This function should only be called from the hashchange
+    // handlers, as it does not set the hash to "".
+    //
+    // We only allow all_messages and recent_topics
+    // to be rendered without a hash.
+    if (page_params.default_view === "recent_topics") {
+        recent_topics_ui.show();
+    } else if (page_params.default_view === "all_messages") {
+        show_all_message_view();
+    } else {
+        // NOTE: Setting a hash which is not rendered on
+        // empty hash (like a stream narrow) will
+        // introduce a bug that user will not be able to
+        // go back in browser history. See
+        // https://chat.zulip.org/#narrow/stream/9-issues/topic/Browser.20back.20button.20on.20RT
+        // for detailed description of the issue.
+        window.location.hash = page_params.default_view;
+    }
 }
 
 // Returns true if this function performed a narrow
@@ -110,14 +128,18 @@ function do_hashchange_normal(from_reload) {
     // Even if the URL bar says #%41%42%43%44, the value here will
     // be #ABCD.
     const hash = window.location.hash.split("/");
+
     switch (hash[0]) {
         case "#narrow": {
             maybe_hide_recent_topics();
             ui_util.change_tab_to("#message_feed_container");
             const operators = hash_util.parse_narrow(hash);
             if (operators === undefined) {
-                // If the narrow URL didn't parse, clear
-                // window.location.hash and send them to the home tab
+                // If the narrow URL didn't parse,
+                // send them to default_view.
+                // We cannot clear hash here since
+                // it will block user from going back
+                // in browser history.
                 show_default_view();
                 return false;
             }
@@ -142,10 +164,10 @@ function do_hashchange_normal(from_reload) {
             show_default_view();
             break;
         case "#recent_topics":
-            recent_topics.show();
+            recent_topics_ui.show();
             break;
         case "#all_messages":
-            activate_home_tab();
+            show_all_message_view();
             break;
         case "#keyboard-shortcuts":
         case "#message-formatting":
@@ -158,22 +180,21 @@ function do_hashchange_normal(from_reload) {
         case "#about-zulip":
             blueslip.error("overlay logic skipped for: " + hash);
             break;
+        default:
+            show_default_view();
     }
     return false;
 }
 
 function do_hashchange_overlay(old_hash) {
     if (old_hash === undefined) {
-        // User directly requested to open an overlay.
-        // We need to show recent topics in the background.
-        // Even though recent topics may not be the default view
-        // here, we show it because we need to show a view in
-        // background and recent topics seems preferable for that.
-        recent_topics.show();
+        // The user opened the app with an overlay hash; we need to
+        // show the user's default view behind it.
+        show_default_view();
     }
-    const base = hash_util.get_hash_category(window.location.hash);
+    const base = hash_util.get_current_hash_category();
     const old_base = hash_util.get_hash_category(old_hash);
-    const section = hash_util.get_hash_section(window.location.hash);
+    const section = hash_util.get_current_hash_section();
 
     const coming_from_overlay = hash_util.is_overlay_hash(old_hash || "#");
 
@@ -184,7 +205,7 @@ function do_hashchange_overlay(old_hash) {
     // the new overlay.
     if (coming_from_overlay && base === old_base) {
         if (base === "streams") {
-            subs.change_state(section);
+            stream_settings_ui.change_state(section);
             return;
         }
 
@@ -221,8 +242,12 @@ function do_hashchange_overlay(old_hash) {
     const is_hashchange_internal =
         settings_hashes.has(base) && settings_hashes.has(old_base) && overlays.settings_open();
     if (is_hashchange_internal) {
+        if (base === "settings") {
+            settings_panel_menu.normal_settings.activate_section_or_default(section);
+        } else {
+            settings_panel_menu.org_settings.activate_section_or_default(section);
+        }
         settings_toggle.highlight_toggle(base);
-        settings_panel_menu.normal_settings.activate_section_or_default(section);
         return;
     }
 
@@ -241,7 +266,7 @@ function do_hashchange_overlay(old_hash) {
     }
 
     if (base === "streams") {
-        subs.launch(section);
+        stream_settings_ui.launch(section);
         return;
     }
 
@@ -291,6 +316,13 @@ function hashchanged(from_reload, e) {
     const was_internal_change = browser_history.save_old_hash();
 
     if (was_internal_change) {
+        return undefined;
+    }
+
+    // TODO: Migrate the `#reload` syntax to use slashes as separators
+    // so that this can be part of the main switch statement.
+    if (window.location.hash.startsWith("#reload")) {
+        // We don't want to change narrow if app is undergoing reload.
         return undefined;
     }
 

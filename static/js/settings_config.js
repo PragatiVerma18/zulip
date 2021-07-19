@@ -93,6 +93,10 @@ export const email_address_visibility_values = {
     //     code: 2,
     //     description: $t({defaultMessage: "Members and admins"}),
     // },
+    moderators: {
+        code: 5,
+        description: $t({defaultMessage: "Admins and moderators"}),
+    },
     admins_only: {
         code: 3,
         description: $t({defaultMessage: "Admins only"}),
@@ -121,19 +125,6 @@ export const common_policy_values = {
     },
     by_members: {
         order: 4,
-        code: 1,
-        description: $t({defaultMessage: "Admins and members"}),
-    },
-};
-
-export const user_group_edit_policy_values = {
-    by_admins_only: {
-        order: 1,
-        code: 2,
-        description: $t({defaultMessage: "Admins"}),
-    },
-    by_members: {
-        order: 2,
         code: 1,
         description: $t({defaultMessage: "Admins and members"}),
     },
@@ -191,6 +182,34 @@ export const wildcard_mention_policy_values = {
         order: 6,
         code: 6,
         description: $t({defaultMessage: "Nobody"}),
+    },
+};
+
+export const common_message_policy_values = {
+    by_everyone: {
+        order: 1,
+        code: 5,
+        description: $t({defaultMessage: "Admins, members and guests"}),
+    },
+    by_members: {
+        order: 2,
+        code: 1,
+        description: $t({defaultMessage: "Admins and members"}),
+    },
+    by_full_members: {
+        order: 3,
+        code: 3,
+        description: $t({defaultMessage: "Admins and full members"}),
+    },
+    by_moderators_only: {
+        order: 4,
+        code: 4,
+        description: $t({defaultMessage: "Admins and moderators"}),
+    },
+    by_admins_only: {
+        order: 5,
+        code: 2,
+        description: $t({defaultMessage: "Admins only"}),
     },
 };
 
@@ -355,13 +374,10 @@ const email_notification_settings = [
     "enable_marketing_emails",
 ];
 
-const presence_notification_settings = ["presence_enabled"];
-
 const other_notification_settings = desktop_notification_settings.concat(
     ["desktop_icon_count_display"],
     mobile_notification_settings,
     email_notification_settings,
-    presence_notification_settings,
     ["notification_sound"],
 );
 
@@ -409,7 +425,6 @@ export const all_notifications = () => ({
         desktop_notification_settings,
         mobile_notification_settings,
         email_notification_settings,
-        presence_notification_settings,
     },
     show_push_notifications_tooltip: {
         push_notifications: !page_params.realm_push_notifications_enabled,

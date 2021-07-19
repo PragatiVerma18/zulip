@@ -489,6 +489,7 @@ exports.fixtures = {
             is_admin: false,
             is_active: true,
             is_owner: false,
+            is_billing_admin: false,
             role: 400,
             is_bot: false,
             is_guest: false,
@@ -658,7 +659,7 @@ exports.fixtures = {
     update_display_settings__default_view_all_messages: {
         type: "update_display_settings",
         setting_name: "default_view",
-        setting: 1,
+        setting: "all_messages",
         user: test_user.email,
     },
 

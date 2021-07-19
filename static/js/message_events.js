@@ -20,7 +20,7 @@ import * as notifications from "./notifications";
 import {page_params} from "./page_params";
 import * as pm_list from "./pm_list";
 import * as recent_senders from "./recent_senders";
-import * as recent_topics from "./recent_topics";
+import * as recent_topics_ui from "./recent_topics_ui";
 import * as resize from "./resize";
 import * as stream_list from "./stream_list";
 import * as stream_topic_history from "./stream_topic_history";
@@ -132,7 +132,7 @@ export function insert_new_messages(messages, sent_by_this_client) {
     notifications.received_messages(messages);
     stream_list.update_streams_sidebar();
     pm_list.update_private_messages();
-    recent_topics.process_messages(messages);
+    recent_topics_ui.process_messages(messages);
 }
 
 export function update_messages(events) {
@@ -387,15 +387,19 @@ export function update_messages(events) {
                 pre_edit_topic = msg.topic;
                 post_edit_topic = pre_edit_topic;
             }
-            const args = [event.stream_id, pre_edit_topic, post_edit_topic, new_stream_id];
+
+            // new_stream_id is undefined if this is only a topic edit.
+            const post_edit_stream_id = new_stream_id || event.stream_id;
+
+            const args = [event.stream_id, pre_edit_topic, post_edit_topic, post_edit_stream_id];
             recent_senders.process_topic_edit({
                 message_ids: event.message_ids,
                 old_stream_id: event.stream_id,
                 old_topic: pre_edit_topic,
-                new_stream_id,
+                new_stream_id: post_edit_stream_id,
                 new_topic: post_edit_topic,
             });
-            recent_topics.process_topic_edit(...args);
+            recent_topics_ui.process_topic_edit(...args);
         }
 
         // Rerender "Message edit history" if it was open to the edited message.
@@ -411,18 +415,18 @@ export function update_messages(events) {
     // propagated edits to be updated (since the topic edits can have
     // changed the correct grouping of messages).
     if (topic_edited || stream_changed) {
-        message_lists.home.update_topic_muting_and_rerender();
+        message_lists.home.update_muting_and_rerender();
         // However, we don't need to rerender message_list.narrowed if
         // we just changed the narrow earlier in this function.
         //
         // TODO: We can potentially optimize this logic to avoid
-        // calling `update_topic_muting_and_rerender` if the muted
+        // calling `update_muting_and_rerender` if the muted
         // messages would not match the view before or after this
         // edit.  Doing so could save significant work, since most
         // topic edits will not match the current topic narrow in
         // large organizations.
         if (!changed_narrow && message_lists.current === message_list.narrowed) {
-            message_list.narrowed.update_topic_muting_and_rerender();
+            message_list.narrowed.update_muting_and_rerender();
         }
     } else {
         // If the content of the message was edited, we do a special animation.
@@ -452,5 +456,5 @@ export function remove_messages(message_ids) {
         list.remove_and_rerender(message_ids);
     }
     recent_senders.update_topics_of_deleted_message_ids(message_ids);
-    recent_topics.update_topics_of_deleted_message_ids(message_ids);
+    recent_topics_ui.update_topics_of_deleted_message_ids(message_ids);
 }

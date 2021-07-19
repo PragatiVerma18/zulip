@@ -17,7 +17,7 @@ from confirmation.models import (
     get_object_from_key,
     render_confirmation_key_error,
 )
-from zerver.decorator import REQ, has_request_variables, human_users_only
+from zerver.decorator import human_users_only
 from zerver.lib.actions import (
     check_change_full_name,
     do_change_avatar_fields,
@@ -29,20 +29,20 @@ from zerver.lib.actions import (
     do_set_user_display_setting,
     do_start_email_change_process,
     get_available_notification_sounds,
-    validate_email_is_valid,
 )
 from zerver.lib.avatar import avatar_url
 from zerver.lib.email_validation import (
     get_realm_email_validator,
+    validate_email_is_valid,
     validate_email_not_already_in_realm,
 )
+from zerver.lib.exceptions import JsonableError, RateLimited
 from zerver.lib.i18n import get_available_language_codes
-from zerver.lib.rate_limiter import RateLimited
-from zerver.lib.request import JsonableError
-from zerver.lib.response import json_error, json_success
+from zerver.lib.request import REQ, has_request_variables
+from zerver.lib.response import json_success
 from zerver.lib.send_email import FromAddress, send_email
 from zerver.lib.upload import upload_avatar_image
-from zerver.lib.validator import check_bool, check_int, check_int_in, check_string, check_string_in
+from zerver.lib.validator import check_bool, check_int, check_int_in, check_string_in
 from zerver.models import UserProfile, avatar_changes_disabled, name_changes_disabled
 from zproject.backends import check_password_strength, email_belongs_to_ldap
 
@@ -97,13 +97,10 @@ def json_change_settings(
     old_password: str = REQ(default=""),
     new_password: str = REQ(default=""),
 ) -> HttpResponse:
-    if not (full_name or new_password or email):
-        return json_error(_("Please fill out all fields."))
-
     if new_password != "":
         return_data: Dict[str, Any] = {}
         if email_belongs_to_ldap(user_profile.realm, user_profile.delivery_email):
-            return json_error(_("Your Zulip password is managed in LDAP"))
+            raise JsonableError(_("Your Zulip password is managed in LDAP"))
 
         try:
             if not authenticate(
@@ -113,18 +110,18 @@ def json_change_settings(
                 realm=user_profile.realm,
                 return_data=return_data,
             ):
-                return json_error(_("Wrong password!"))
+                raise JsonableError(_("Wrong password!"))
         except RateLimited as e:
             assert e.secs_to_freedom is not None
             secs_to_freedom = int(e.secs_to_freedom)
-            return json_error(
+            raise JsonableError(
                 _("You're making too many attempts! Try again in {} seconds.").format(
                     secs_to_freedom
                 ),
             )
 
         if not check_password_strength(new_password):
-            return json_error(_("New password is too weak!"))
+            raise JsonableError(_("New password is too weak!"))
 
         do_change_password(user_profile, new_password)
         # In Django 1.10, password changes invalidates sessions, see
@@ -146,14 +143,14 @@ def json_change_settings(
     new_email = email.strip()
     if user_profile.delivery_email != new_email and new_email != "":
         if user_profile.realm.email_changes_disabled and not user_profile.is_realm_admin:
-            return json_error(_("Email address changes are disabled in this organization."))
+            raise JsonableError(_("Email address changes are disabled in this organization."))
 
         error = validate_email_is_valid(
             new_email,
             get_realm_email_validator(user_profile.realm),
         )
         if error:
-            return json_error(error)
+            raise JsonableError(error)
 
         try:
             validate_email_not_already_in_realm(
@@ -162,10 +159,9 @@ def json_change_settings(
                 verbose=False,
             )
         except ValidationError as e:
-            return json_error(e.message)
+            raise JsonableError(e.message)
 
         do_start_email_change_process(user_profile, new_email)
-        result["account_email"] = _("Check your email for a confirmation link. ")
 
     if user_profile.full_name != full_name and full_name.strip() != "":
         if name_changes_disabled(user_profile.realm) and not user_profile.is_realm_admin:
@@ -174,7 +170,18 @@ def json_change_settings(
             pass
         else:
             # Note that check_change_full_name strips the passed name automatically
-            result["full_name"] = check_change_full_name(user_profile, full_name, user_profile)
+            check_change_full_name(user_profile, full_name, user_profile)
+
+    # TODO: Do this more generally.
+    from zerver.lib.request import get_request_notes
+
+    request_notes = get_request_notes(request)
+    for req_var in request.POST:
+        if req_var not in request_notes.processed_parameters:
+            request_notes.ignored_parameters.add(req_var)
+
+    if len(request_notes.ignored_parameters) > 0:
+        result["ignored_parameters_unsupported"] = list(request_notes.ignored_parameters)
 
     return json_success(result)
 
@@ -197,17 +204,17 @@ def update_display_settings_backend(
         json_validator=check_int_in(UserProfile.COLOR_SCHEME_CHOICES), default=None
     ),
     translate_emoticons: Optional[bool] = REQ(json_validator=check_bool, default=None),
-    default_language: Optional[str] = REQ(json_validator=check_string, default=None),
+    default_language: Optional[str] = REQ(default=None),
     default_view: Optional[str] = REQ(
-        json_validator=check_string_in(default_view_options), default=None
+        str_validator=check_string_in(default_view_options), default=None
     ),
     left_side_userlist: Optional[bool] = REQ(json_validator=check_bool, default=None),
-    emojiset: Optional[str] = REQ(json_validator=check_string_in(emojiset_choices), default=None),
+    emojiset: Optional[str] = REQ(str_validator=check_string_in(emojiset_choices), default=None),
     demote_inactive_streams: Optional[int] = REQ(
         json_validator=check_int_in(UserProfile.DEMOTE_STREAMS_CHOICES), default=None
     ),
     timezone: Optional[str] = REQ(
-        json_validator=check_string_in(pytz.all_timezones_set), default=None
+        str_validator=check_string_in(pytz.all_timezones_set), default=None
     ),
 ) -> HttpResponse:
 
@@ -223,6 +230,10 @@ def update_display_settings_backend(
         if v is not None and getattr(user_profile, k) != v:
             do_set_user_display_setting(user_profile, k, v)
             result[k] = v
+
+    if timezone is not None and user_profile.timezone != timezone:
+        do_set_user_display_setting(user_profile, "timezone", timezone)
+        result["timezone"] = timezone
 
     return json_success(result)
 
@@ -243,7 +254,7 @@ def json_change_notify_settings(
         json_validator=check_bool, default=None
     ),
     wildcard_mentions_notify: Optional[bool] = REQ(json_validator=check_bool, default=None),
-    notification_sound: Optional[str] = REQ(json_validator=check_string, default=None),
+    notification_sound: Optional[str] = REQ(default=None),
     enable_desktop_notifications: Optional[bool] = REQ(json_validator=check_bool, default=None),
     enable_sounds: Optional[bool] = REQ(json_validator=check_bool, default=None),
     enable_offline_email_notifications: Optional[bool] = REQ(
@@ -291,16 +302,16 @@ def json_change_notify_settings(
 
 def set_avatar_backend(request: HttpRequest, user_profile: UserProfile) -> HttpResponse:
     if len(request.FILES) != 1:
-        return json_error(_("You must upload exactly one avatar."))
+        raise JsonableError(_("You must upload exactly one avatar."))
 
     if avatar_changes_disabled(user_profile.realm) and not user_profile.is_realm_admin:
-        return json_error(str(AVATAR_CHANGES_DISABLED_ERROR))
+        raise JsonableError(str(AVATAR_CHANGES_DISABLED_ERROR))
 
     user_file = list(request.FILES.values())[0]
-    if (settings.MAX_AVATAR_FILE_SIZE * 1024 * 1024) < user_file.size:
-        return json_error(
+    if (settings.MAX_AVATAR_FILE_SIZE_MIB * 1024 * 1024) < user_file.size:
+        raise JsonableError(
             _("Uploaded file is larger than the allowed limit of {} MiB").format(
-                settings.MAX_AVATAR_FILE_SIZE,
+                settings.MAX_AVATAR_FILE_SIZE_MIB,
             )
         )
     upload_avatar_image(user_file, user_profile, user_profile)
@@ -315,7 +326,7 @@ def set_avatar_backend(request: HttpRequest, user_profile: UserProfile) -> HttpR
 
 def delete_avatar_backend(request: HttpRequest, user_profile: UserProfile) -> HttpResponse:
     if avatar_changes_disabled(user_profile.realm) and not user_profile.is_realm_admin:
-        return json_error(str(AVATAR_CHANGES_DISABLED_ERROR))
+        raise JsonableError(str(AVATAR_CHANGES_DISABLED_ERROR))
 
     do_change_avatar_fields(
         user_profile, UserProfile.AVATAR_FROM_GRAVATAR, acting_user=user_profile

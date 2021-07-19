@@ -2,6 +2,7 @@ import datetime
 import hashlib
 import logging
 import os
+import smtplib
 from email.headerregistry import Address
 from email.parser import Parser
 from email.policy import default
@@ -246,10 +247,27 @@ def send_email(
 
     if connection is None:
         connection = get_connection()
-    # This will call .open() for us, which is a no-op if it's already open;
-    # it will only call .close() if it was not open to begin with
-    if connection.send_messages([mail]) == 0:
-        logger.error("Error sending %s email to %s", template, mail.to)
+
+    try:
+        # This will call .open() for us, which is a no-op if it's already open;
+        # it will only call .close() if it was not open to begin with
+        if connection.send_messages([mail]) == 0:
+            logger.error("Unknown error sending %s email to %s", template, mail.to)
+            raise EmailNotDeliveredException
+    except smtplib.SMTPResponseException as e:
+        logger.exception(
+            "Error sending %s email to %s with error code %s: %s",
+            template,
+            mail.to,
+            e.smtp_code,
+            e.smtp_error,
+            stack_info=True,
+        )
+        raise EmailNotDeliveredException
+    except smtplib.SMTPException as e:
+        logger.exception(
+            "Error sending %s email to %s: %s", template, mail.to, str(e), stack_info=True
+        )
         raise EmailNotDeliveredException
 
 
@@ -362,6 +380,24 @@ def send_email_to_admins(
     )
 
 
+def send_email_to_billing_admins_and_realm_owners(
+    template_prefix: str,
+    realm: Realm,
+    from_name: Optional[str] = None,
+    from_address: Optional[str] = None,
+    language: Optional[str] = None,
+    context: Dict[str, Any] = {},
+) -> None:
+    send_email(
+        template_prefix,
+        to_user_ids=[user.id for user in realm.get_human_billing_admin_and_realm_owner_users()],
+        from_name=from_name,
+        from_address=from_address,
+        language=language,
+        context=context,
+    )
+
+
 def clear_scheduled_invitation_emails(email: str) -> None:
     """Unlike most scheduled emails, invitation emails don't have an
     existing user object to key off of, so we filter by address here."""
@@ -409,14 +445,14 @@ def handle_send_email_format_changes(job: Dict[str, Any]) -> None:
         del job["to_user_id"]
 
 
-def deliver_email(email: ScheduledEmail) -> None:
+def deliver_scheduled_emails(email: ScheduledEmail) -> None:
     data = orjson.loads(email.data)
     user_ids = list(email.users.values_list("id", flat=True))
     if not user_ids and not email.address:
         # This state doesn't make sense, so something must be mutating,
         # or in the process of deleting, the object. We assume it will bring
         # things to a correct state, and we just do nothing except logging this event.
-        logger.warning("ScheduledEmail id %s has empty users and address attributes.", email.id)
+        logger.error("ScheduledEmail id %s has empty users and address attributes.", email.id)
         return
 
     if user_ids:
@@ -441,7 +477,7 @@ def send_custom_email(users: List[UserProfile], options: Dict[str, Any]) -> None
     Can be used directly with from a management shell with
     send_custom_email(user_profile_list, dict(
         markdown_template_path="/path/to/markdown/file.md",
-        subject="Email Subject",
+        subject="Email subject",
         from_name="Sender Name")
     )
     """
@@ -464,7 +500,7 @@ def send_custom_email(users: List[UserProfile], options: Dict[str, Any]) -> None
     with open(plain_text_template_path, "w") as f:
         f.write(parsed_email_template.get_payload())
 
-    from zerver.templatetags.app_filters import render_markdown_path
+    from zerver.lib.templates import render_markdown_path
 
     rendered_input = render_markdown_path(plain_text_template_path.replace("templates/", ""))
 

@@ -38,6 +38,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TypeVar,
     Union,
     cast,
     overload,
@@ -48,8 +49,10 @@ from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator, validate_email
 from django.utils.translation import gettext as _
 
-from zerver.lib.request import JsonableError, ResultT
+from zerver.lib.exceptions import JsonableError
 from zerver.lib.types import ProfileFieldData, Validator
+
+ResultT = TypeVar("ResultT")
 
 
 def check_string(var_name: str, val: object) -> str:
@@ -136,6 +139,19 @@ def check_int_in(possible_values: List[int]) -> Validator[int]:
         n = check_int(var_name, val)
         if n not in possible_values:
             raise ValidationError(_("Invalid {var_name}").format(var_name=var_name))
+        return n
+
+    return validator
+
+
+def check_int_range(low: int, high: int) -> Validator[int]:
+    # low and high are both treated as valid values
+    def validator(var_name: str, val: object) -> int:
+        n = check_int(var_name, val)
+        if n < low:
+            raise ValidationError(_("{var_name} is too small").format(var_name=var_name))
+        if n > high:
+            raise ValidationError(_("{var_name} is too large").format(var_name=var_name))
         return n
 
     return validator
@@ -455,6 +471,84 @@ def check_widget_content(widget_content: object) -> Dict[str, Any]:
     raise ValidationError("unknown widget type: " + widget_type)
 
 
+# This should match MAX_IDX in our client widgets. It is somewhat arbitrary.
+MAX_IDX = 1000
+
+
+def validate_poll_data(poll_data: object, is_widget_author: bool) -> None:
+    check_dict([("type", check_string)])("poll data", poll_data)
+
+    assert isinstance(poll_data, dict)
+
+    if poll_data["type"] == "vote":
+        checker = check_dict_only(
+            [
+                ("type", check_string),
+                ("key", check_string),
+                ("vote", check_int_in([1, -1])),
+            ]
+        )
+        checker("poll data", poll_data)
+        return
+
+    if poll_data["type"] == "question":
+        if not is_widget_author:
+            raise ValidationError("You can't edit a question unless you are the author.")
+
+        checker = check_dict_only(
+            [
+                ("type", check_string),
+                ("question", check_string),
+            ]
+        )
+        checker("poll data", poll_data)
+        return
+
+    if poll_data["type"] == "new_option":
+        checker = check_dict_only(
+            [
+                ("type", check_string),
+                ("option", check_string),
+                ("idx", check_int_range(0, MAX_IDX)),
+            ]
+        )
+        checker("poll data", poll_data)
+        return
+
+    raise ValidationError(f"Unknown type for poll data: {poll_data['type']}")
+
+
+def validate_todo_data(todo_data: object) -> None:
+    check_dict([("type", check_string)])("todo data", todo_data)
+
+    assert isinstance(todo_data, dict)
+
+    if todo_data["type"] == "new_task":
+        checker = check_dict_only(
+            [
+                ("type", check_string),
+                ("key", check_int_range(0, MAX_IDX)),
+                ("task", check_string),
+                ("desc", check_string),
+                ("completed", check_bool),
+            ]
+        )
+        checker("todo data", todo_data)
+        return
+
+    if todo_data["type"] == "strike":
+        checker = check_dict_only(
+            [
+                ("type", check_string),
+                ("key", check_string),
+            ]
+        )
+        checker("todo data", todo_data)
+        return
+
+    raise ValidationError(f"Unknown type for todo data: {todo_data['type']}")
+
+
 # Converter functions for use with has_request_variables
 def to_non_negative_int(s: str, max_int_size: int = 2 ** 32 - 1) -> int:
     x = int(s)
@@ -465,10 +559,10 @@ def to_non_negative_int(s: str, max_int_size: int = 2 ** 32 - 1) -> int:
     return x
 
 
-def to_positive_or_allowed_int(allowed_integer: int) -> Callable[[str], int]:
+def to_positive_or_allowed_int(allowed_integer: Optional[int] = None) -> Callable[[str], int]:
     def converter(s: str) -> int:
         x = int(s)
-        if x == allowed_integer:
+        if allowed_integer is not None and x == allowed_integer:
             return x
         if x == 0:
             raise ValueError("argument is 0")
@@ -494,3 +588,21 @@ def check_string_or_int(var_name: str, val: object) -> Union[str, int]:
         return val
 
     raise ValidationError(_("{var_name} is not a string or integer").format(var_name=var_name))
+
+
+TypeA = TypeVar("TypeA")
+TypeB = TypeVar("TypeB")
+
+
+def check_or(
+    sub_validator1: Validator[TypeA], sub_validator2: Validator[TypeB]
+) -> Validator[Union[TypeA, TypeB]]:
+    def f(var_name: str, val: object) -> Union[TypeA, TypeB]:
+        try:
+            return sub_validator1(var_name, val)
+        except ValidationError:
+            pass
+
+        return sub_validator2(var_name, val)
+
+    return f

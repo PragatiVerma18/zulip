@@ -2,6 +2,7 @@ import Handlebars from "handlebars/runtime";
 import _ from "lodash";
 
 import {$t} from "./i18n";
+import * as message_edit from "./message_edit";
 import * as message_parser from "./message_parser";
 import * as message_store from "./message_store";
 import {page_params} from "./page_params";
@@ -69,35 +70,47 @@ function message_in_home(message) {
 function message_matches_search_term(message, operator, operand) {
     switch (operator) {
         case "has":
-            if (operand === "image") {
-                return message_parser.message_has_image(message);
-            } else if (operand === "link") {
-                return message_parser.message_has_link(message);
-            } else if (operand === "attachment") {
-                return message_parser.message_has_attachment(message);
+            switch (operand) {
+                case "image":
+                    return message_parser.message_has_image(message);
+                case "link":
+                    return message_parser.message_has_link(message);
+                case "attachment":
+                    return message_parser.message_has_attachment(message);
+                default:
+                    return false; // has:something_else returns false
             }
-            return false; // has:something_else returns false
+
         case "is":
-            if (operand === "private") {
-                return message.type === "private";
-            } else if (operand === "starred") {
-                return message.starred;
-            } else if (operand === "mentioned") {
-                return message.mentioned;
-            } else if (operand === "alerted") {
-                return message.alerted;
-            } else if (operand === "unread") {
-                return unread.message_unread(message);
+            switch (operand) {
+                case "private":
+                    return message.type === "private";
+                case "starred":
+                    return message.starred;
+                case "mentioned":
+                    return message.mentioned;
+                case "alerted":
+                    return message.alerted;
+                case "unread":
+                    return unread.message_unread(message);
+                case "resolved":
+                    return (
+                        message.type === "stream" &&
+                        message.topic.startsWith(message_edit.RESOLVED_TOPIC_PREFIX)
+                    );
+                default:
+                    return false; // is:whatever returns false
             }
-            return false; // is:whatever returns false
 
         case "in":
-            if (operand === "home") {
-                return message_in_home(message);
-            } else if (operand === "all") {
-                return true;
+            switch (operand) {
+                case "home":
+                    return message_in_home(message);
+                case "all":
+                    return true;
+                default:
+                    return false; // in:whatever returns false
             }
-            return false; // in:whatever returns false
 
         case "near":
             // this is all handled server side
@@ -440,7 +453,7 @@ export class Filter {
             return true;
         }
 
-        if (_.isEqual(term_types, ["is-mentioned"])) {
+        if (_.isEqual(term_types, ["is-resolved"])) {
             return true;
         }
 
@@ -477,15 +490,20 @@ export class Filter {
         // can_mark_messages_read tests the following filters:
         // stream, stream + topic,
         // is: private, pm-with:,
-        // is: mentioned
+        // is: resolved
         if (this.can_mark_messages_read()) {
             return true;
         }
         // that leaves us with checking:
         // is: starred
         // (which can_mark_messages_read_does not check as starred messages are always read)
+        // is: mentioned
+        // We don't mark messages as read when in mentioned narrow.
         const term_types = this.sorted_term_types();
 
+        if (_.isEqual(term_types, ["is-mentioned"])) {
+            return true;
+        }
         if (_.isEqual(term_types, ["is-starred"])) {
             return true;
         }
@@ -543,10 +561,12 @@ export class Filter {
                 case "streams-public":
                     return "/#narrow/streams/public";
                 case "pm-with":
-                    // join is used to transform the array to a comma separated string
                     return (
-                        "/#narrow/pm-with/" + people.emails_to_slug(this.operands("pm-with").join())
+                        "/#narrow/pm-with/" +
+                        people.emails_to_slug(this.operands("pm-with").join(","))
                     );
+                case "is-resolved":
+                    return "/#narrow/topics/is/resolved";
                 // TODO: It is ambiguous how we want to handle the 'sender' case,
                 // we may remove it in the future based on design decisions
                 case "sender":
@@ -583,6 +603,8 @@ export class Filter {
                 return "at";
             case "pm-with":
                 return "envelope";
+            case "is-resolved":
+                return "check";
             default:
                 return undefined;
         }
@@ -633,6 +655,8 @@ export class Filter {
                     // can have the same return type as other cases.
                     return names.join(", ");
                 }
+                case "is-resolved":
+                    return $t({defaultMessage: "Topics marked as resolved"});
             }
         }
         /* istanbul ignore next */
@@ -842,6 +866,7 @@ export class Filter {
             "is-private",
             "is-starred",
             "is-unread",
+            "is-resolved",
             "has-link",
             "has-image",
             "has-attachment",

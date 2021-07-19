@@ -1,6 +1,8 @@
 import $ from "jquery";
 
+import render_keyboard_shortcut from "../templates/keyboard_shortcuts.hbs";
 import render_markdown_help from "../templates/markdown_help.hbs";
+import render_search_operator from "../templates/search_operators.hbs";
 
 import * as browser_history from "./browser_history";
 import * as common from "./common";
@@ -9,7 +11,6 @@ import {$t, $t_html} from "./i18n";
 import * as keydown_util from "./keydown_util";
 import * as markdown from "./markdown";
 import * as overlays from "./overlays";
-import * as popovers from "./popovers";
 import * as rendered_markdown from "./rendered_markdown";
 import * as ui from "./ui";
 import * as util from "./util";
@@ -165,6 +166,12 @@ export function set_up_toggler() {
     });
     $(".informational-overlays .overlay-body").append($markdown_help);
 
+    const $search_operators = $(render_search_operator());
+    $(".informational-overlays .overlay-body").append($search_operators);
+
+    const $keyboard_shortcuts = $(render_keyboard_shortcut());
+    $(".informational-overlays .overlay-body").append($keyboard_shortcuts);
+
     const opts = {
         selected: 0,
         child_wants_focus: true,
@@ -195,8 +202,8 @@ export function set_up_toggler() {
         keydown_util.handle({
             elem: modal,
             handlers: {
-                left_arrow: toggler.maybe_go_left,
-                right_arrow: toggler.maybe_go_right,
+                ArrowLeft: toggler.maybe_go_left,
+                ArrowRight: toggler.maybe_go_right,
             },
         });
     }
@@ -227,14 +234,4 @@ export function show(target) {
     if (target) {
         toggler.goto(target);
     }
-}
-
-export function maybe_show_keyboard_shortcuts() {
-    if (overlays.is_active()) {
-        return;
-    }
-    if (popovers.any_active()) {
-        return;
-    }
-    show("keyboard-shortcuts");
 }

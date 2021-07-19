@@ -1,31 +1,22 @@
-import smtplib
+from smtplib import SMTP, SMTPDataError, SMTPException, SMTPRecipientsRefused
 from unittest import mock
 
 from django.core.mail.backends.locmem import EmailBackend
 from django.core.mail.backends.smtp import EmailBackend as SMTPBackend
 from django.core.mail.message import sanitize_address
 
-from zerver.lib.send_email import FromAddress, build_email, initialize_connection
+from zerver.lib.send_email import (
+    EmailNotDeliveredException,
+    FromAddress,
+    build_email,
+    initialize_connection,
+    logger,
+    send_email,
+)
 from zerver.lib.test_classes import ZulipTestCase
-
-OVERLY_LONG_NAME = "Z̷̧̙̯͙̠͇̰̲̞̙͆́͐̅̌͐̔͑̚u̷̼͎̹̻̻̣̞͈̙͛͑̽̉̾̀̅̌͜͠͞ļ̛̫̻̫̰̪̩̠̣̼̏̅́͌̊͞į̴̛̛̩̜̜͕̘̂̑̀̈p̡̛͈͖͓̟͍̿͒̍̽͐͆͂̀ͅ A̰͉̹̅̽̑̕͜͟͡c̷͚̙̘̦̞̫̭͗̋͋̾̑͆̒͟͞c̵̗̹̣̲͚̳̳̮͋̈́̾̉̂͝ͅo̠̣̻̭̰͐́͛̄̂̿̏͊u̴̱̜̯̭̞̠͋͛͐̍̄n̸̡̘̦͕͓̬͌̂̎͊͐̎͌̕ť̮͎̯͎̣̙̺͚̱̌̀́̔͢͝ S͇̯̯̙̳̝͆̊̀͒͛̕ę̛̘̬̺͎͎́̔̊̀͂̓̆̕͢ͅc̨͎̼̯̩̽͒̀̏̄̌̚u̷͉̗͕̼̮͎̬͓͋̃̀͂̈̂̈͊͛ř̶̡͔̺̱̹͓̺́̃̑̉͡͞ͅi̶̺̭͈̬̞̓̒̃͆̅̿̀̄́t͔̹̪͔̥̣̙̍̍̍̉̑̏͑́̌ͅŷ̧̗͈͚̥̗͚͊͑̀͢͜͡"
 
 
 class TestBuildEmail(ZulipTestCase):
-    def test_build_SES_compatible_From_field(self) -> None:
-        hamlet = self.example_user("hamlet")
-        from_name = FromAddress.security_email_from_name(language="en")
-        mail = build_email(
-            "zerver/emails/password_reset",
-            to_emails=[hamlet],
-            from_name=from_name,
-            from_address=FromAddress.NOREPLY,
-            language="en",
-        )
-        self.assertEqual(
-            mail.extra_headers["From"], "{} <{}>".format(from_name, FromAddress.NOREPLY)
-        )
-
     def test_build_SES_compatible_From_field_limit(self) -> None:
         hamlet = self.example_user("hamlet")
         limit_length_name = "a" * (320 - len(sanitize_address(FromAddress.NOREPLY, "utf-8")) - 3)
@@ -40,28 +31,69 @@ class TestBuildEmail(ZulipTestCase):
             mail.extra_headers["From"], "{} <{}>".format(limit_length_name, FromAddress.NOREPLY)
         )
 
-    def test_build_SES_incompatible_From_field(self) -> None:
+    def test_build_and_send_SES_incompatible_From_address(self) -> None:
         hamlet = self.example_user("hamlet")
+        from_name = "Zulip"
+        # Address by itself is > 320 bytes even without the name. Should trigger exception.
+        overly_long_address = "a" * 320 + "@zulip.com"
         mail = build_email(
             "zerver/emails/password_reset",
             to_emails=[hamlet],
-            from_name=OVERLY_LONG_NAME,
-            from_address=FromAddress.NOREPLY,
+            from_name=from_name,
+            from_address=overly_long_address,
             language="en",
         )
-        self.assertEqual(mail.extra_headers["From"], FromAddress.NOREPLY)
+        self.assertEqual(mail.extra_headers["From"], overly_long_address)
+        self.assertGreater(len(sanitize_address(mail.extra_headers["From"], "utf-8")), 320)
 
-    def test_build_SES_incompatible_From_field_limit(self) -> None:
-        hamlet = self.example_user("hamlet")
-        limit_length_name = "a" * (321 - len(sanitize_address(FromAddress.NOREPLY, "utf-8")) - 3)
-        mail = build_email(
-            "zerver/emails/password_reset",
-            to_emails=[hamlet],
-            from_name=limit_length_name,
-            from_address=FromAddress.NOREPLY,
-            language="en",
+        with mock.patch.object(
+            EmailBackend, "send_messages", side_effect=SMTPDataError(242, "From field too long.")
+        ):
+            with self.assertLogs(logger=logger) as info_log:
+                with self.assertRaises(EmailNotDeliveredException):
+                    send_email(
+                        "zerver/emails/password_reset",
+                        to_emails=[hamlet],
+                        from_name=from_name,
+                        from_address=overly_long_address,
+                        language="en",
+                    )
+        self.assert_length(info_log.records, 2)
+        self.assertEqual(
+            info_log.output[0], f"INFO:{logger.name}:Sending password_reset email to {mail.to}"
         )
-        self.assertEqual(mail.extra_headers["From"], FromAddress.NOREPLY)
+        self.assertTrue(
+            info_log.output[1].startswith(
+                f"ERROR:{logger.name}:Error sending password_reset email to {mail.to} with error code 242: From field too long."
+            )
+        )
+
+    def test_build_and_send_refused(self) -> None:
+        hamlet = self.example_user("hamlet")
+        address = "zulip@example.com"
+        with mock.patch.object(
+            EmailBackend,
+            "send_messages",
+            side_effect=SMTPRecipientsRefused(recipients={address: (550, b"User unknown")}),
+        ):
+            with self.assertLogs(logger=logger) as info_log:
+                with self.assertRaises(EmailNotDeliveredException):
+                    send_email(
+                        "zerver/emails/password_reset",
+                        to_emails=[hamlet],
+                        from_name="Zulip",
+                        from_address=address,
+                        language="en",
+                    )
+        self.assert_length(info_log.records, 2)
+        self.assertEqual(
+            info_log.output[0], f"INFO:{logger.name}:Sending password_reset email to {[hamlet]}"
+        )
+        self.assertFalse(
+            info_log.output[1].startswith(
+                f"ERROR:{logger.name}:Error sending password_reset email to {[hamlet]}: {{'{address}': (550, 'User unknown')}}"
+            )
+        )
 
 
 class TestSendEmail(ZulipTestCase):
@@ -72,7 +104,7 @@ class TestSendEmail(ZulipTestCase):
             self.assertTrue(isinstance(backend, EmailBackend))
 
         backend = mock.MagicMock(spec=SMTPBackend)
-        backend.connection = mock.MagicMock(spec=smtplib.SMTP)
+        backend.connection = mock.MagicMock(spec=SMTP)
 
         self.assertTrue(isinstance(backend, SMTPBackend))
 
@@ -98,3 +130,42 @@ class TestSendEmail(ZulipTestCase):
             initialize_connection(backend)
         # 3 more calls to open as we try 3 times before giving up
         self.assertEqual(backend.open.call_count, 6)
+
+    def test_send_email_exceptions(self) -> None:
+        hamlet = self.example_user("hamlet")
+        from_name = FromAddress.security_email_from_name(language="en")
+        # Used to check the output
+        mail = build_email(
+            "zerver/emails/password_reset",
+            to_emails=[hamlet],
+            from_name=from_name,
+            from_address=FromAddress.NOREPLY,
+            language="en",
+        )
+        self.assertEqual(
+            mail.extra_headers["From"], "{} <{}>".format(from_name, FromAddress.NOREPLY)
+        )
+
+        # We test the two cases that should raise an EmailNotDeliveredException
+        errors = {
+            f"Unknown error sending password_reset email to {mail.to}": [0],
+            f"Error sending password_reset email to {mail.to}": [SMTPException()],
+        }
+
+        for message, side_effect in errors.items():
+            with mock.patch.object(EmailBackend, "send_messages", side_effect=side_effect):
+                with self.assertLogs(logger=logger) as info_log:
+                    with self.assertRaises(EmailNotDeliveredException):
+                        send_email(
+                            "zerver/emails/password_reset",
+                            to_emails=[hamlet],
+                            from_name=from_name,
+                            from_address=FromAddress.NOREPLY,
+                            language="en",
+                        )
+                self.assert_length(info_log.records, 2)
+                self.assertEqual(
+                    info_log.output[0],
+                    f"INFO:{logger.name}:Sending password_reset email to {mail.to}",
+                )
+                self.assertTrue(info_log.output[1].startswith(f"ERROR:zulip.send_email:{message}"))

@@ -29,7 +29,6 @@ IGNORED_PHRASES = [
     r"ID",
     r"IDs",
     r"IP",
-    r"JIRA",
     r"JSON",
     r"Kerberos",
     r"LDAP",
@@ -68,7 +67,7 @@ IGNORED_PHRASES = [
     r"Emoji One",
     r"mailinator.com",
     r"HQ",
-    r"Big Blue Button",
+    r"BigBlueButton",
     # Code things
     r".zuliprc",
     r"__\w+\.\w+__",

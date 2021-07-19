@@ -3,10 +3,11 @@ from argparse import ArgumentParser
 from typing import Any
 
 from django.core.exceptions import ValidationError
+from django.core.management.base import CommandError
 from django.db.utils import IntegrityError
 
 from zerver.lib.domains import validate_domain
-from zerver.lib.management import CommandError, ZulipBaseCommand
+from zerver.lib.management import ZulipBaseCommand
 from zerver.models import RealmDomain, get_realm_domains
 
 
@@ -21,7 +22,7 @@ class Command(ZulipBaseCommand):
             "--allow-subdomains", action="store_true", help="Whether subdomains are allowed or not."
         )
         parser.add_argument("domain", metavar="<domain>", nargs="?", help="domain to add or remove")
-        self.add_realm_args(parser, True)
+        self.add_realm_args(parser, required=True)
 
     def handle(self, *args: Any, **options: str) -> None:
         realm = self.get_realm(options)

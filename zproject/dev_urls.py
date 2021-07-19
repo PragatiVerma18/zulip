@@ -11,6 +11,7 @@ from django.views.static import serve
 
 from zerver.views.auth import config_error, login_page
 from zerver.views.development.cache import remove_caches
+from zerver.views.development.camo import handle_camo_url
 from zerver.views.development.dev_login import (
     api_dev_fetch_api_key,
     api_dev_list_users,
@@ -66,7 +67,7 @@ urls = [
     path("emails/clear/", clear_emails),
     # Listing of useful URLs and various tools for development
     path("devtools/", TemplateView.as_view(template_name="zerver/development/dev_tools.html")),
-    # Register New User and Realm
+    # Register new user and realm
     path("devtools/register_user/", register_development_user, name="register_dev_user"),
     path("devtools/register_realm/", register_development_realm, name="register_dev_realm"),
     # Have easy access for error pages
@@ -86,6 +87,8 @@ urls = [
     path("config-error/remoteuser/<error_category_name>", config_error),
     # Special endpoint to remove all the server-side caches.
     path("flush_caches", remove_caches),
+    # Redirect camo URLs for development
+    path("external_content/<digest>/<received_url>", handle_camo_url),
 ]
 
 v1_api_mobile_patterns = [

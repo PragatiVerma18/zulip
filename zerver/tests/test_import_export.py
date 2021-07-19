@@ -90,7 +90,7 @@ class QueryUtilTest(ZulipTestCase):
         for query in get_queries():
             # For our test to be meaningful, we want non-empty queries
             # at first
-            assert len(list(query)) > 0
+            self.assertGreater(len(list(query)), 0)
 
         queries = get_queries()
 
@@ -107,7 +107,7 @@ class QueryUtilTest(ZulipTestCase):
                 all_row_ids.append(row.id)
 
         self.assertEqual(all_row_ids, sorted(all_row_ids))
-        self.assertEqual(len(all_msg_ids), len(Message.objects.all()))
+        self.assert_length(all_msg_ids, len(Message.objects.all()))
 
         # Now just search for cordelia/hamlet.  Note that we don't really
         # need the order_by here, but it should be harmless.
@@ -142,7 +142,7 @@ class QueryUtilTest(ZulipTestCase):
             len(all_msg_ids),
             len(Message.objects.exclude(sender_id=cordelia.id)),
         )
-        self.assertTrue(len(all_msg_ids) > 15)
+        self.assertGreater(len(all_msg_ids), 15)
 
         # Verify assertions about disjoint-ness.
         queries = [
@@ -169,9 +169,9 @@ class QueryUtilTest(ZulipTestCase):
             id_collector=all_msg_ids,
             chunk_size=11,  # use a different size each time
         )
-        self.assertEqual(len(all_msg_ids), 0)  # until we actually use the iterator
+        self.assert_length(all_msg_ids, 0)  # until we actually use the iterator
         list(chunker)  # exhaust the iterator
-        self.assertEqual(len(all_msg_ids), len(Message.objects.all()))
+        self.assert_length(all_msg_ids, len(Message.objects.all()))
 
         # Verify that we can just get the first chunk with a next() call.
         queries = [
@@ -184,8 +184,8 @@ class QueryUtilTest(ZulipTestCase):
             chunk_size=10,  # use a different size each time
         )
         first_chunk = next(chunker)
-        self.assertEqual(len(first_chunk), 10)
-        self.assertEqual(len(all_msg_ids), 10)
+        self.assert_length(first_chunk, 10)
+        self.assert_length(all_msg_ids, 10)
         expected_msg = Message.objects.all()[0:10][5]
         actual_msg = first_chunk[5]
         self.assertEqual(actual_msg.content, expected_msg.content)
@@ -314,7 +314,7 @@ class ImportExportTest(ZulipTestCase):
         full_data = self._export_realm(realm)
 
         data = full_data["attachment"]
-        self.assertEqual(len(data["zerver_attachment"]), 1)
+        self.assert_length(data["zerver_attachment"], 1)
         record = data["zerver_attachment"][0]
         self.assertEqual(record["path_id"], path_id)
 
@@ -385,7 +385,7 @@ class ImportExportTest(ZulipTestCase):
         full_data = self._export_realm(realm)
 
         data = full_data["attachment"]
-        self.assertEqual(len(data["zerver_attachment"]), 1)
+        self.assert_length(data["zerver_attachment"], 1)
         record = data["zerver_attachment"][0]
         self.assertEqual(record["path_id"], attachment_path_id)
 
@@ -467,8 +467,8 @@ class ImportExportTest(ZulipTestCase):
         realm_emoji.save()
 
         data = full_data["realm"]
-        self.assertEqual(len(data["zerver_userprofile_crossrealm"]), 3)
-        self.assertEqual(len(data["zerver_userprofile_mirrordummy"]), 0)
+        self.assert_length(data["zerver_userprofile_crossrealm"], 3)
+        self.assert_length(data["zerver_userprofile_mirrordummy"], 0)
 
         exported_user_emails = self.get_set(data["zerver_userprofile"], "delivery_email")
         self.assertIn(self.example_email("cordelia"), exported_user_emails)
@@ -477,7 +477,7 @@ class ImportExportTest(ZulipTestCase):
         exported_streams = self.get_set(data["zerver_stream"], "name")
         self.assertEqual(
             exported_streams,
-            {"Denmark", "Rome", "Scotland", "Venice", "Verona"},
+            {"Denmark", "Rome", "Scotland", "Venice", "Verona", "core team"},
         )
 
         exported_alert_words = data["zerver_alertword"]
@@ -485,7 +485,7 @@ class ImportExportTest(ZulipTestCase):
         # We set up 4 alert words for Hamlet, Cordelia, etc.
         # when we populate the test database.
         num_zulip_users = 10
-        self.assertEqual(len(exported_alert_words), num_zulip_users * 4)
+        self.assert_length(exported_alert_words, num_zulip_users * 4)
 
         self.assertIn("robotics", {r["word"] for r in exported_alert_words})
 
@@ -558,12 +558,12 @@ class ImportExportTest(ZulipTestCase):
         create_stream_if_needed(realm, "Private A", invite_only=True)
         self.subscribe(self.example_user("iago"), "Private A")
         self.subscribe(self.example_user("othello"), "Private A")
-        self.send_stream_message(self.example_user("iago"), "Private A", "Hello Stream A")
+        self.send_stream_message(self.example_user("iago"), "Private A", "Hello stream A")
 
         create_stream_if_needed(realm, "Private B", invite_only=True)
         self.subscribe(self.example_user("prospero"), "Private B")
         stream_b_message_id = self.send_stream_message(
-            self.example_user("prospero"), "Private B", "Hello Stream B"
+            self.example_user("prospero"), "Private B", "Hello stream B"
         )
         self.subscribe(self.example_user("hamlet"), "Private B")
 
@@ -571,7 +571,7 @@ class ImportExportTest(ZulipTestCase):
         self.subscribe(self.example_user("othello"), "Private C")
         self.subscribe(self.example_user("prospero"), "Private C")
         stream_c_message_id = self.send_stream_message(
-            self.example_user("othello"), "Private C", "Hello Stream C"
+            self.example_user("othello"), "Private C", "Hello stream C"
         )
 
         # Create huddles
@@ -627,8 +627,8 @@ class ImportExportTest(ZulipTestCase):
 
         data = full_data["realm"]
 
-        self.assertEqual(len(data["zerver_userprofile_crossrealm"]), 3)
-        self.assertEqual(len(data["zerver_userprofile_mirrordummy"]), 0)
+        self.assert_length(data["zerver_userprofile_crossrealm"], 3)
+        self.assert_length(data["zerver_userprofile_mirrordummy"], 0)
 
         exported_user_emails = self.get_set(data["zerver_userprofile"], "delivery_email")
         self.assertIn(self.example_email("cordelia"), exported_user_emails)
@@ -641,6 +641,7 @@ class ImportExportTest(ZulipTestCase):
         self.assertEqual(
             exported_streams,
             {
+                "core team",
                 "Denmark",
                 "Rome",
                 "Scotland",
@@ -657,7 +658,7 @@ class ImportExportTest(ZulipTestCase):
             user_profile__in=[self.example_user("iago"), self.example_user("hamlet")]
         )
         um = exported_usermessages[0]
-        self.assertEqual(len(data["zerver_usermessage"]), len(exported_usermessages))
+        self.assert_length(data["zerver_usermessage"], len(exported_usermessages))
         exported_um = self.find_by_id(data["zerver_usermessage"], um.id)
         self.assertEqual(exported_um["message"], um.message_id)
         self.assertEqual(exported_um["user_profile"], um.user_profile_id)
@@ -676,10 +677,10 @@ class ImportExportTest(ZulipTestCase):
             recipient__in=public_stream_recipients
         ).values_list("id", flat=True)
 
-        # Messages from Private Stream C are not exported since no member gave consent
-        private_stream_ids = Stream.objects.filter(name__in=["Private A", "Private B"]).values_list(
-            "id", flat=True
-        )
+        # Messages from Private stream C are not exported since no member gave consent
+        private_stream_ids = Stream.objects.filter(
+            name__in=["Private A", "Private B", "core team"]
+        ).values_list("id", flat=True)
         private_stream_recipients = Recipient.objects.filter(
             type_id__in=private_stream_ids, type=Recipient.STREAM
         )
@@ -942,7 +943,7 @@ class ImportExportTest(ZulipTestCase):
         # test realmauditlog
         def get_realm_audit_log_event_type(r: Realm) -> Set[str]:
             realmauditlogs = RealmAuditLog.objects.filter(realm=r).exclude(
-                event_type=RealmAuditLog.REALM_PLAN_TYPE_CHANGED
+                event_type__in=[RealmAuditLog.REALM_PLAN_TYPE_CHANGED, RealmAuditLog.STREAM_CREATED]
             )
             realmauditlog_event_type = {log.event_type for log in realmauditlogs}
             return realmauditlog_event_type
@@ -1171,7 +1172,7 @@ class ImportExportTest(ZulipTestCase):
 
         # Test attachments
         uploaded_file = Attachment.objects.get(realm=imported_realm)
-        self.assertEqual(len(b"zulip!"), uploaded_file.size)
+        self.assert_length(b"zulip!", uploaded_file.size)
 
         attachment_file_path = os.path.join(
             settings.LOCAL_UPLOADS_DIR, "files", uploaded_file.path_id
@@ -1236,7 +1237,7 @@ class ImportExportTest(ZulipTestCase):
 
         # Test attachments
         uploaded_file = Attachment.objects.get(realm=imported_realm)
-        self.assertEqual(len(b"zulip!"), uploaded_file.size)
+        self.assert_length(b"zulip!", uploaded_file.size)
 
         attachment_content = uploads_bucket.Object(uploaded_file.path_id).get()["Body"].read()
         self.assertEqual(b"zulip!", attachment_content)

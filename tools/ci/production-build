@@ -34,12 +34,18 @@ mkdir /tmp/production-build
 mv /tmp/tmp.*/zulip-server-test.tar.gz /tmp/production-build
 cp -a \
     tools/ci/success-http-headers.template.txt \
-    tools/ci/success-http-headers.template.debian.txt \
     tools/ci/production-install \
     tools/ci/production-verify \
+    tools/ci/production-upgrade \
     tools/ci/production-upgrade-pg \
-    tools/ci/production-extract-tarball \
     tools/ci/send-failure-message \
     package.json yarn.lock \
     \
     /tmp/production-build
+
+# Check that webpack bundles use only ES5 syntax.
+tar -C /tmp -xzf /tmp/production-build/zulip-server-test.tar.gz zulip-server-test/prod-static/serve/webpack-bundles
+(
+    GLOBIGNORE=/tmp/zulip-server-test/prod-static/serve/webpack-bundles/katex-cli.js
+    yarn run es-check es5 /tmp/zulip-server-test/prod-static/serve/webpack-bundles/*.js
+)

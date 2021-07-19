@@ -1,7 +1,8 @@
+import ClipboardJS from "clipboard";
 import $ from "jquery";
 
 import render_all_messages_sidebar_actions from "../templates/all_messages_sidebar_actions.hbs";
-import render_delete_topic_modal from "../templates/delete_topic_modal.hbs";
+import render_delete_topic_modal from "../templates/confirm_dialog/confirm_delete_topic.hbs";
 import render_move_topic_to_stream from "../templates/move_topic_to_stream.hbs";
 import render_starred_messages_sidebar_actions from "../templates/starred_messages_sidebar_actions.hbs";
 import render_stream_sidebar_actions from "../templates/stream_sidebar_actions.hbs";
@@ -11,20 +12,25 @@ import * as blueslip from "./blueslip";
 import * as browser_history from "./browser_history";
 import * as channel from "./channel";
 import * as compose_actions from "./compose_actions";
+import * as confirm_dialog from "./confirm_dialog";
+import {DropdownListWidget as dropdown_list_widget} from "./dropdown_list_widget";
 import * as hash_util from "./hash_util";
+import {$t, $t_html} from "./i18n";
 import * as message_edit from "./message_edit";
-import * as muting from "./muting";
-import * as muting_ui from "./muting_ui";
+import * as muted_topics from "./muted_topics";
+import * as muted_topics_ui from "./muted_topics_ui";
+import * as overlays from "./overlays";
 import {page_params} from "./page_params";
 import * as popovers from "./popovers";
 import * as resize from "./resize";
+import * as settings_data from "./settings_data";
 import * as starred_messages from "./starred_messages";
 import * as starred_messages_ui from "./starred_messages_ui";
 import * as stream_bar from "./stream_bar";
 import * as stream_color from "./stream_color";
 import * as stream_data from "./stream_data";
+import * as stream_settings_ui from "./stream_settings_ui";
 import * as sub_store from "./sub_store";
-import * as subs from "./subs";
 import * as unread_ops from "./unread_ops";
 
 // We handle stream popovers and topic popovers in this
@@ -33,6 +39,8 @@ let current_stream_sidebar_elem;
 let current_topic_sidebar_elem;
 let all_messages_sidebar_elem;
 let starred_messages_sidebar_elem;
+let stream_widget;
+let stream_header_colorblock;
 
 function get_popover_menu_items(sidebar_elem) {
     if (!sidebar_elem) {
@@ -179,6 +187,25 @@ function update_spectrum(popover, update_func) {
     popover_root.css("top", top + "px");
 }
 
+// Builds the `Copy link to topic` topic action.
+function build_topic_link_clipboard(url) {
+    if (!url) {
+        return;
+    }
+
+    const copy_event = new ClipboardJS(".sidebar-popover-copy-link-to-topic", {
+        text() {
+            return url;
+        },
+    });
+
+    // Hide the topic popover once the url is successfully
+    // copied to clipboard.
+    copy_event.on("success", () => {
+        hide_topic_popover();
+    });
+}
+
 function build_stream_popover(opts) {
     const elt = opts.elt;
     const stream_id = opts.stream_id;
@@ -234,15 +261,20 @@ function build_topic_popover(opts) {
     popovers.hide_all();
     show_streamlist_sidebar();
 
-    const topic_muted = muting.is_topic_muted(sub.stream_id, topic_name);
+    const topic_muted = muted_topics.is_topic_muted(sub.stream_id, topic_name);
     const has_starred_messages = starred_messages.get_count_in_topic(sub.stream_id, topic_name) > 0;
+    // Arguably, we could offer the "Move topic" option even if users
+    // can only edit the name within a stream.
+    const can_move_topic = settings_data.user_can_move_messages_between_streams();
 
     const content = render_topic_sidebar_actions({
         stream_name: sub.name,
         stream_id: sub.stream_id,
         topic_name,
         topic_muted,
+        can_move_topic,
         is_realm_admin: page_params.is_admin,
+        topic_is_resolved: topic_name.startsWith(message_edit.RESOLVED_TOPIC_PREFIX),
         color: sub.color,
         has_starred_messages,
     });
@@ -323,33 +355,37 @@ function build_move_topic_to_stream_popover(e, current_stream_id, topic_name) {
     // NOTE: Private streams are also included in this list.  We
     // likely will make it possible to move messages to/from private
     // streams in the future.
-    const available_streams = stream_data
-        .subscribed_subs()
-        .filter((s) => s.stream_id !== current_stream_id);
     const current_stream_name = stream_data.maybe_get_stream_name(current_stream_id);
     const args = {
-        available_streams,
         topic_name,
         current_stream_id,
-        current_stream_name,
         notify_new_thread: message_edit.notify_new_thread_default,
         notify_old_thread: message_edit.notify_old_thread_default,
+    };
+
+    const streams_list = stream_data.subscribed_subs().map((stream) => ({
+        name: stream.name,
+        value: stream.stream_id.toString(),
+    }));
+    const opts = {
+        widget_name: "select_stream",
+        data: streams_list,
+        default_text: $t({defaultMessage: "No streams"}),
+        include_current_item: false,
+        value: current_stream_id,
     };
 
     hide_topic_popover();
 
     $("#move-a-topic-modal-holder").html(render_move_topic_to_stream(args));
 
-    const stream_header_colorblock = $(".topic_stream_edit_header").find(
+    stream_widget = dropdown_list_widget(opts);
+    stream_header_colorblock = $("#move_topic_modal .topic_stream_edit_header").find(
         ".stream_header_colorblock",
     );
-    stream_bar.decorate(current_stream_name, stream_header_colorblock, false);
-    $("#select_stream_id").on("change", function () {
-        const stream_name = stream_data.maybe_get_stream_name(Number.parseInt(this.value, 10));
-        stream_bar.decorate(stream_name, stream_header_colorblock, false);
-    });
 
-    $("#move_topic_modal").modal("show");
+    stream_bar.decorate(current_stream_name, stream_header_colorblock, false);
+    overlays.open_modal("#move_topic_modal");
 }
 
 export function register_click_handlers() {
@@ -373,12 +409,15 @@ export function register_click_handlers() {
         const stream_li = $(elt).closest(".narrow-filter").expectOne();
         const stream_id = elem_to_stream_id(stream_li);
         const topic_name = $(elt).closest("li").expectOne().attr("data-topic-name");
+        const url = $(elt).closest("li").find(".topic-name").expectOne().prop("href");
 
         build_topic_popover({
             elt,
             stream_id,
             topic_name,
         });
+
+        build_topic_link_clipboard(url);
     });
 
     $("#global_filters").on("click", ".all-messages-sidebar-menu-icon", build_all_messages_popover);
@@ -388,6 +427,21 @@ export function register_click_handlers() {
         ".starred-messages-sidebar-menu-icon",
         build_starred_messages_popover,
     );
+
+    $("body").on("click keypress", ".move-topic-dropdown .list_item", (e) => {
+        // We want the dropdown to collapse once any of the list item is pressed
+        // and thus don't want to kill the natural bubbling of event.
+        e.preventDefault();
+
+        if (e.type === "keypress" && e.key !== "Enter") {
+            return;
+        }
+        const stream_name = stream_data.maybe_get_stream_name(
+            Number.parseInt(stream_widget.value(), 10),
+        );
+
+        stream_bar.decorate(stream_name, stream_header_colorblock, false);
+    });
 
     register_stream_handlers();
     register_topic_handlers();
@@ -407,7 +461,7 @@ export function register_stream_handlers() {
     $("body").on("click", ".pin_to_top", (e) => {
         const sub = stream_popover_sub(e);
         hide_stream_popover();
-        subs.toggle_pin_to_top_stream(sub);
+        stream_settings_ui.toggle_pin_to_top_stream(sub);
         e.stopPropagation();
     });
 
@@ -464,7 +518,7 @@ export function register_stream_handlers() {
     $("body").on("click", ".toggle_stream_muted", (e) => {
         const sub = stream_popover_sub(e);
         hide_stream_popover();
-        subs.set_muted(sub, !sub.is_muted);
+        stream_settings_ui.set_muted(sub, !sub.is_muted);
         e.stopPropagation();
     });
 
@@ -488,7 +542,7 @@ export function register_stream_handlers() {
         $(this).closest(".popover").fadeOut(500).delay(500).remove();
 
         const sub = stream_popover_sub(e);
-        subs.sub_or_unsub(sub, true);
+        stream_settings_ui.sub_or_unsub(sub, true);
         e.preventDefault();
         e.stopPropagation();
     });
@@ -518,6 +572,43 @@ export function register_stream_handlers() {
     });
 }
 
+function with_first_message_id(stream_id, topic_name, success_cb, error_cb) {
+    // The API endpoint for editing messages to change their
+    // content, topic, or stream requires a message ID.
+    //
+    // Because we don't have full data in the browser client, it's
+    // possible that we might display a topic in the left sidebar
+    // (and thus expose the UI for moving its topic to another
+    // stream) without having a message ID that is definitely
+    // within the topic.  (The comments in stream_topic_history.js
+    // discuss the tricky issues around message deletion that are
+    // involved here).
+    //
+    // To ensure this option works reliably at a small latency
+    // cost for a rare operation, we just ask the server for the
+    // latest message ID in the topic.
+    const data = {
+        anchor: "newest",
+        num_before: 1,
+        num_after: 0,
+        narrow: JSON.stringify([
+            {operator: "stream", operand: stream_id},
+            {operator: "topic", operand: topic_name},
+        ]),
+    };
+
+    channel.get({
+        url: "/json/messages",
+        data,
+        idempotent: true,
+        success(data) {
+            const message_id = data.messages[0].id;
+            success_cb(message_id);
+        },
+        error_cb,
+    });
+}
+
 export function register_topic_handlers() {
     // Mute the topic
     $("body").on("click", ".sidebar-popover-mute-topic", (e) => {
@@ -527,7 +618,7 @@ export function register_topic_handlers() {
         }
 
         const topic = $(e.currentTarget).attr("data-topic-name");
-        muting_ui.mute_topic(stream_id, topic);
+        muted_topics_ui.mute_topic(stream_id, topic);
         e.stopPropagation();
         e.preventDefault();
     });
@@ -540,7 +631,7 @@ export function register_topic_handlers() {
         }
 
         const topic = $(e.currentTarget).attr("data-topic-name");
-        muting_ui.unmute_topic(stream_id, topic);
+        muted_topics_ui.unmute_topic(stream_id, topic);
         e.stopPropagation();
         e.preventDefault();
     });
@@ -572,15 +663,33 @@ export function register_topic_handlers() {
 
         hide_topic_popover();
 
-        $("#delete-topic-modal-holder").html(render_delete_topic_modal(args));
+        const modal_parent = $("#delete-topic-modal-holder");
+        const html_body = render_delete_topic_modal(args);
 
-        $("#do_delete_topic_button").on("click", () => {
-            message_edit.delete_topic(stream_id, topic);
+        confirm_dialog.launch({
+            parent: modal_parent,
+            html_heading: $t_html({defaultMessage: "Delete topic"}),
+            help_link: "/help/delete-a-topic",
+            html_body,
+            on_click: () => {
+                message_edit.delete_topic(stream_id, topic);
+            },
         });
 
-        $("#delete_topic_modal").modal("show");
-
         e.stopPropagation();
+    });
+
+    $("body").on("click", ".sidebar-popover-toggle-resolved", (e) => {
+        const topic_row = $(e.currentTarget);
+        const stream_id = Number.parseInt(topic_row.attr("data-stream-id"), 10);
+        const topic_name = topic_row.attr("data-topic-name");
+        with_first_message_id(stream_id, topic_name, (message_id) => {
+            message_edit.toggle_resolve_topic(message_id, topic_name);
+        });
+
+        hide_topic_popover();
+        e.stopPropagation();
+        e.preventDefault();
     });
 
     $("body").on("click", ".sidebar-popover-move-topic-messages", (e) => {
@@ -610,7 +719,9 @@ export function register_topic_handlers() {
                 .map(({name, value}) => [name, value]),
         );
 
-        const {old_topic_name, select_stream_id} = params;
+        const {old_topic_name} = params;
+        const select_stream_id = stream_widget.value();
+
         let {
             current_stream_id,
             new_topic_name,
@@ -630,38 +741,11 @@ export function register_topic_handlers() {
             return;
         }
 
-        // The API endpoint for editing messages to change their
-        // content, topic, or stream requires a message ID.
-        //
-        // Because we don't have full data in the browser client, it's
-        // possible that we might display a topic in the left sidebar
-        // (and thus expose the UI for moving its topic to another
-        // stream) without having a message ID that is definitely
-        // within the topic.  (The comments in stream_topic_history.js
-        // discuss the tricky issues around message deletion that are
-        // involved here).
-        //
-        // To ensure this option works reliably at a small latency
-        // cost for a rare operation, we just ask the server for the
-        // latest message ID in the topic.
-        const data = {
-            anchor: "newest",
-            num_before: 1,
-            num_after: 0,
-            narrow: JSON.stringify([
-                {operator: "stream", operand: current_stream_id},
-                {operator: "topic", operand: old_topic_name},
-            ]),
-        };
-
         message_edit.show_topic_move_spinner();
-        channel.get({
-            url: "/json/messages",
-            data,
-            idempotent: true,
-            success(data) {
-                const message_id = data.messages[0].id;
-
+        with_first_message_id(
+            current_stream_id,
+            old_topic_name,
+            (message_id) => {
                 if (old_topic_name.trim() === new_topic_name.trim()) {
                     // We use `undefined` to tell the server that
                     // there has been no change in the topic name.
@@ -678,10 +762,10 @@ export function register_topic_handlers() {
                     );
                 }
             },
-            error(xhr) {
+            (xhr) => {
                 message_edit.hide_topic_move_spinner();
                 show_error_msg(xhr.responseJSON.msg);
             },
-        });
+        );
     });
 }

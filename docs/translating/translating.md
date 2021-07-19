@@ -2,7 +2,9 @@
 
 Zulip's has full support for Unicode (and partial support for RTL
 languages), so you can use your preferred language everywhere in
-Zulip.  We also translate the Zulip UI into more than a dozen major
+Zulip.
+
+Additionally, the Zulip UI is translated into more than a dozen major
 languages, including Spanish, German, Hindi, French, Chinese, Russian,
 and Japanese, and we're always excited to add more.  If you speak a
 language other than English, your help with translating Zulip is be
@@ -18,6 +20,11 @@ Developers](../translating/internationalization.md).
 These are the steps you should follow if you want to help translate
 Zulip:
 
+1. Join [#translation][translation-stream] in the [Zulip development
+community server](../contributing/chat-zulip-org.md), and say hello.
+That stream is also the right place for any questions, updates on your
+progress, reporting problematic strings, etc.
+
 1. Sign up for [Transifex](https://www.transifex.com) and ask to join the [Zulip
 project on Transifex](https://www.transifex.com/zulip/zulip/), requesting access
 to any languages that you'd like to contribute to (or add new ones).
@@ -31,11 +38,6 @@ to any languages that you'd like to contribute to (or add new ones).
        general Russian translations.
    ```
 
-1. Join [#translation][translation-stream] in the [Zulip development
-community server](../contributing/chat-zulip-org.md), and say hello.
-That stream is also the right place for any questions, updates on your
-progress, reporting problematic strings, etc.
-
 1. Wait for a maintainer to approve your Transifex access; this
    usually takes less than a day. You should then be able to access
    Zulip's dashboard in Transifex.
@@ -44,9 +46,9 @@ progress, reporting problematic strings, etc.
    several resource files:
    * `mobile.json` is for the iOS/Android mobile apps.
    * `desktop.json` is for the parts of the Zulip desktop apps that
-     are not shared with the Zulip webapp.
+     are not shared with the Zulip web app.
    * `django.po` and `translations.json` have strings for the next
-     major release of the Zulip server and webapp (which is what we
+     major release of the Zulip server and web app (which is what we
      run on chat.zulip.org and Zulip Cloud).
    * The variants of `django.po` and `translations.json` with names
      starting with a version, like, `4-x--`, are strings for Zulip's
@@ -99,6 +101,11 @@ Some useful tips for your translating journey:
 - Take advantage of the hotkeys the Transifex Web Editor provides, such as
   `Tab` for saving and going to the next string.
 
+- While one should definitely prioritize translating
+  `translations.json`, since the most prominent user-facing strings
+  are there, API error messages in `django.po` are presented to users,
+  so a full translation should include them.
+
 ### Testing translations
 
 This section assumes you have a
@@ -119,7 +126,7 @@ There are a few ways to see your translations in the Zulip UI:
   can view the login page in German using
   `http://localhost:9991/de/login/`.  This works for any part of the
   Zulip UI, including portico (logged-out) pages.
-* For Zulip's logged-in UI (i.e. the actual webapp), you can [pick the
+* For Zulip's logged-in UI (i.e. the actual web app), you can [pick the
   language](https://zulip.com/help/change-your-language) in the
   Zulip UI.
 * If your system has languages configured in your OS/browser, Zulip's
@@ -191,7 +198,7 @@ capitalization in general.  This means that:
     - Incorrect: "Url"
 
 The Zulip test suite enforces these capitalization guidelines in the
-webapp codebase [in our test
+web app codebase [in our test
 suite](../testing/testing.html#other-test-suites)
 (`./tools/check-capitalization`; `tools/lib/capitalization.py` has
 some exclude lists, e.g. `IGNORED_PHRASES`).

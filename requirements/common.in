@@ -100,7 +100,7 @@ tornado==4.*  # https://github.com/zulip/zulip/issues/8913
 orjson
 
 # Needed for iOS push notifications
-apns2
+aioapns
 
 python-twitter
 
@@ -109,9 +109,6 @@ polib
 
 # Needed for cloning virtual environments
 virtualenv-clone
-
-# Needed for reading json as stream
-ijson
 
 # Needed for link preview
 beautifulsoup4
@@ -125,15 +122,16 @@ python-magic
 # the version from Git rather than a PyPI release. Keeping everything in
 # one repository simplifies the process of implementing and documenting
 # new bots for new contributors.
-https://github.com/zulip/python-zulip-api/archive/175972ce49989f2d346c5948ed43fe7ac9809964.zip#egg=zulip==0.7.1+git&subdirectory=zulip
-https://github.com/zulip/python-zulip-api/archive/175972ce49989f2d346c5948ed43fe7ac9809964.zip#egg=zulip_bots==0.7.1+git&subdirectory=zulip_bots
+https://github.com/zulip/python-zulip-api/archive/0.8.0.zip#egg=zulip==0.8.0+git&subdirectory=zulip
+https://github.com/zulip/python-zulip-api/archive/0.8.0.zip#egg=zulip_bots==0.8.0+git&subdirectory=zulip_bots
 
 # Used for Hesiod lookups, etc.
 py3dns
 
 # Install Python Social Auth
 social-auth-app-django
-social-auth-core[azuread,saml]<4.0.3  # 4.0.3 needs PyJWT 2: https://github.com/Pr0Ger/PyAPNs2/pull/122, https://github.com/twilio/twilio-python/issues/556
+social-auth-core[azuread,openidconnect,saml]
+https://github.com/onelogin/python3-saml/archive/4b6c4b1f2ed3f6eab70ff4391e595b808ace168c.zip#egg=python3-saml==1.10.1+git  # remove defusedxml: https://github.com/onelogin/python3-saml/pull/236
 
 # For encrypting a login token to the desktop app
 cryptography
@@ -143,6 +141,7 @@ lxml
 
 # Needed for 2-factor authentication
 django-two-factor-auth[call,phonenumberslite,sms]
+https://github.com/karls/twilio-python/archive/355de2bc698596c20226990be48d8625d17e38fb.zip#egg=twilio==6.61.0+git  # support PyJWT ≥ 2.0.0: https://github.com/twilio/twilio-python/pull/560
 
 # Needed for processing payments (in corporate)
 stripe
@@ -155,10 +154,6 @@ disposable-email-domains
 
 # Needed for parsing YAML with JSON references from the REST API spec files
 jsonref
-
-# Needed for signing thumbnail requests so that they can be authenticated on the
-# other end.
-libthumbor
 
 # Needed for string matching in AlertWordProcessor
 pyahocorasick
@@ -188,3 +183,6 @@ pyuca
 
 # Handle connection retries with exponential backoff
 backoff
+
+# Needed for reading bson files in rocketchat import tool
+pymongo

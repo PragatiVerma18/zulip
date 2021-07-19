@@ -7,7 +7,7 @@
                 {{#if is_bot}}
                 <i class="zulip-icon zulip-icon-bot" aria-hidden="true"></i>
                 {{else}}
-                <span class="{{user_circle_class}} user_circle popover_user_presence" title="{{user_last_seen_time_status}}"></span>
+                <span class="{{user_circle_class}} user_circle popover_user_presence tippy-zulip-tooltip" data-tippy-content="{{user_last_seen_time_status}}"></span>
                 {{/if}}
             {{/if}}
         </li>
@@ -15,13 +15,13 @@
 
         {{#if is_active }}
             {{#if show_email}}
-            <li class="user_popover_email">
-                <i class="fa fa-clone hide_copy_icon" data-clipboard-text="{{ user_email }}"></i>
-                {{ user_email }}
-                <div class="tooltip_holder">
-                    <span class="email_tooltip">{{ user_email }}</span>
-                </div>
-            </li>
+            {{!-- This div is added to enable interactivity for tooltip - https://atomiks.github.io/tippyjs/v5/accessibility/#interactivity --}}
+            <div>
+                <li class="user_popover_email">
+                    <i class="fa fa-clone hide_copy_icon" data-clipboard-text="{{ user_email }}"></i>
+                    {{ user_email }}
+                </li>
+            </div>
             {{/if}}
         {{else}}
             <li class="user_popover_email half-opacity italic">{{#tr}}(This user has been deactivated){{/tr}}</li>
@@ -63,7 +63,7 @@
         {{#if can_revoke_away}}
         <li>
             <a tabindex="0" class="revoke_away_status">
-                <i class="fa fa-minus-circle" aria-hidden="true"></i> {{#tr}}Set yourself as active{{/tr}}
+                <i class="fa fa-minus-circle" aria-hidden="true"></i> {{#tr}}Set yourself as available{{/tr}}
             </a>
         </li>
         {{/if}}
@@ -129,7 +129,7 @@
     {{/unless}}
     {{#if is_me}}
     <li>
-        <a href="/#settings/your-account">
+        <a href="/#settings/profile">
             <i class="fa fa-edit" aria-hidden="true"></i> {{#tr}}Edit your profile{{/tr}}
         </a>
     </li>

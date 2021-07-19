@@ -1,6 +1,7 @@
 import {subDays} from "date-fns";
 import Handlebars from "handlebars/runtime";
 import $ from "jquery";
+import tippy from "tippy.js";
 
 import render_draft_table_body from "../templates/draft_table_body.hbs";
 
@@ -137,8 +138,17 @@ export function restore_message(draft) {
 }
 
 function draft_notify() {
-    $(".alert-draft").css("display", "inline-block");
-    $(".alert-draft").delay(1000).fadeOut(500);
+    // Display a tooltip to notify the user about the saved draft.
+    const instance = tippy(".compose_drafts_button", {
+        content: $t({defaultMessage: "Saved as draft"}),
+        arrow: true,
+        placement: "top",
+    })[0];
+    instance.show();
+    function remove_instance() {
+        instance.destroy();
+    }
+    setTimeout(remove_instance, 1500);
 }
 
 export function update_draft() {
@@ -170,7 +180,7 @@ export function update_draft() {
     draft_notify();
 }
 
-export function delete_draft_after_send() {
+export function delete_active_draft() {
     const draft_id = $("#compose-textarea").data("draft-id");
     if (draft_id) {
         draft_model.deleteDraft(draft_id);
@@ -379,7 +389,6 @@ export function launch() {
         });
     }
 
-    remove_old_drafts();
     const drafts = format_drafts(draft_model.get());
     render_widgets(drafts);
 
@@ -471,13 +480,13 @@ export function drafts_handle_events(e, event_key) {
 
     // This detects up arrow key presses when the draft overlay
     // is open and scrolls through the drafts.
-    if (event_key === "up_arrow") {
+    if (event_key === "up_arrow" || event_key === "vim_up") {
         drafts_scroll(row_before_focus());
     }
 
     // This detects down arrow key presses when the draft overlay
     // is open and scrolls through the drafts.
-    if (event_key === "down_arrow") {
+    if (event_key === "down_arrow" || event_key === "vim_down") {
         drafts_scroll(row_after_focus());
     }
 
@@ -541,13 +550,13 @@ export function set_initial_element(drafts) {
 }
 
 export function initialize() {
+    remove_old_drafts();
+
     window.addEventListener("beforeunload", () => {
         update_draft();
     });
 
     set_count(Object.keys(draft_model.get()).length);
-
-    $("#compose-textarea").on("focusout", update_draft);
 
     $("body").on("focus", ".draft-info-box", (e) => {
         activate_element(e.target);

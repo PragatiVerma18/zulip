@@ -21,7 +21,7 @@ const settings_org = mock_esm("../../static/js/settings_org");
 const settings_streams = mock_esm("../../static/js/settings_streams");
 const stream_events = mock_esm("../../static/js/stream_events");
 const stream_list = mock_esm("../../static/js/stream_list");
-const subs = mock_esm("../../static/js/subs");
+const stream_settings_ui = mock_esm("../../static/js/stream_settings_ui");
 message_lists.current = {};
 
 const peer_data = zrequire("peer_data");
@@ -44,13 +44,13 @@ people.initialize_current_user(me.user_id);
 const dispatch = server_events_dispatch.dispatch_normal_event;
 
 function test(label, f) {
-    run_test(label, (override) => {
+    run_test(label, ({override}) => {
         stream_data.clear_subscriptions();
-        f(override);
+        f({override});
     });
 }
 
-test("add", (override) => {
+test("add", ({override}) => {
     const event = event_fixtures.subscription__add;
 
     const sub = event.subscriptions[0];
@@ -70,7 +70,7 @@ test("add", (override) => {
     assert.deepEqual(args.subscribers, event.subscriptions[0].subscribers);
 });
 
-test("peer add/remove", (override) => {
+test("peer add/remove", ({override}) => {
     let event = event_fixtures.subscription__peer_add;
 
     stream_data.add_sub({
@@ -79,7 +79,7 @@ test("peer add/remove", (override) => {
     });
 
     const subs_stub = make_stub();
-    override(subs, "update_subscribers_ui", subs_stub.f);
+    override(stream_settings_ui, "update_subscribers_ui", subs_stub.f);
 
     const compose_fade_stub = make_stub();
     override(compose_fade, "update_faded_users", compose_fade_stub.f);
@@ -88,17 +88,17 @@ test("peer add/remove", (override) => {
     assert.equal(compose_fade_stub.num_calls, 1);
     assert.equal(subs_stub.num_calls, 1);
 
-    assert(peer_data.is_user_subscribed(event.stream_ids[0], event.user_ids[0]));
+    assert.ok(peer_data.is_user_subscribed(event.stream_ids[0], event.user_ids[0]));
 
     event = event_fixtures.subscription__peer_remove;
     dispatch(event);
     assert.equal(compose_fade_stub.num_calls, 2);
     assert.equal(subs_stub.num_calls, 2);
 
-    assert(!peer_data.is_user_subscribed(event.stream_ids[0], event.user_ids[0]));
+    assert.ok(!peer_data.is_user_subscribed(event.stream_ids[0], event.user_ids[0]));
 });
 
-test("remove", (override) => {
+test("remove", ({override}) => {
     const event = event_fixtures.subscription__remove;
     const event_sub = event.subscriptions[0];
     const stream_id = event_sub.stream_id;
@@ -118,7 +118,7 @@ test("remove", (override) => {
     assert.deepEqual(args.sub, sub);
 });
 
-test("update", (override) => {
+test("update", ({override}) => {
     const event = event_fixtures.subscription__update;
 
     const stub = make_stub();
@@ -140,7 +140,7 @@ test("add error handling", () => {
     blueslip.reset();
 });
 
-test("peer event error handling (bad stream_ids/user_ids)", (override) => {
+test("peer event error handling (bad stream_ids/user_ids)", ({override}) => {
     override(compose_fade, "update_faded_users", () => {});
 
     const add_event = {
@@ -167,7 +167,7 @@ test("peer event error handling (bad stream_ids/user_ids)", (override) => {
     dispatch(remove_event);
 });
 
-test("stream update", (override) => {
+test("stream update", ({override}) => {
     const event = event_fixtures.stream__update;
 
     const stub = make_stub();
@@ -181,12 +181,12 @@ test("stream update", (override) => {
     assert.equal(args.value, event.value);
 });
 
-test("stream create", (override) => {
+test("stream create", ({override}) => {
     const event = event_fixtures.stream__create;
 
     const stub = make_stub();
     override(stream_data, "create_streams", stub.f);
-    override(subs, "add_sub_to_table", noop);
+    override(stream_settings_ui, "add_sub_to_table", noop);
     override(overlays, "streams_open", () => true);
     dispatch(event);
     assert.equal(stub.num_calls, 1);
@@ -197,7 +197,7 @@ test("stream create", (override) => {
     );
 });
 
-test("stream delete (normal)", (override) => {
+test("stream delete (normal)", ({override}) => {
     const event = event_fixtures.stream__delete;
 
     for (const stream of event.streams) {
@@ -218,7 +218,7 @@ test("stream delete (normal)", (override) => {
 
     const removed_stream_ids = [];
 
-    override(subs, "remove_stream", (stream_id) => {
+    override(stream_settings_ui, "remove_stream", (stream_id) => {
         removed_stream_ids.push(stream_id);
     });
 
@@ -238,7 +238,7 @@ test("stream delete (normal)", (override) => {
     assert.equal(removed_sidebar_rows, 1);
 });
 
-test("stream delete (special streams)", (override) => {
+test("stream delete (special streams)", ({override}) => {
     const event = event_fixtures.stream__delete;
 
     for (const stream of event.streams) {
@@ -250,7 +250,7 @@ test("stream delete (special streams)", (override) => {
     page_params.realm_notifications_stream_id = event.streams[0].stream_id;
     page_params.realm_signup_notifications_stream_id = event.streams[1].stream_id;
 
-    override(subs, "remove_stream", noop);
+    override(stream_settings_ui, "remove_stream", noop);
     override(settings_org, "sync_realm_settings", noop);
     override(settings_streams, "update_default_streams_table", noop);
     override(message_lists.current, "update_trailing_bookend", noop);

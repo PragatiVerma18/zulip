@@ -5,9 +5,8 @@ from django.utils.timezone import now as timezone_now
 from django.utils.translation import gettext as _
 from typing_extensions import TypedDict
 
-from zerver.lib.exceptions import StreamAdministratorRequired
+from zerver.lib.exceptions import JsonableError, StreamAdministratorRequired
 from zerver.lib.markdown import markdown_convert
-from zerver.lib.request import JsonableError
 from zerver.lib.stream_subscription import get_active_subscriptions_for_stream_id
 from zerver.models import (
     DefaultStreamGroup,
@@ -75,7 +74,7 @@ def get_default_value_for_history_public_to_subscribers(
 
 
 def render_stream_description(text: str) -> str:
-    return markdown_convert(text, no_previews=True)
+    return markdown_convert(text, no_previews=True).rendered_content
 
 
 def send_stream_creation_event(stream: Stream, user_ids: List[int]) -> None:

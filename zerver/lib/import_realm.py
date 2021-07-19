@@ -4,6 +4,7 @@ import multiprocessing
 import os
 import secrets
 import shutil
+from mimetypes import guess_type
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import orjson
@@ -31,7 +32,7 @@ from zerver.lib.message import get_last_message_id
 from zerver.lib.server_initialization import create_internal_realm, server_initialized
 from zerver.lib.streams import render_stream_description
 from zerver.lib.timestamp import datetime_to_timestamp
-from zerver.lib.upload import BadImageError, get_bucket, guess_type, sanitize_name
+from zerver.lib.upload import BadImageError, get_bucket, sanitize_name
 from zerver.lib.utils import generate_api_key, process_list_in_batches
 from zerver.models import (
     AlertWord,
@@ -347,7 +348,7 @@ def fix_message_rendered_content(
                 message_realm=realm,
                 sent_by_bot=sent_by_bot,
                 translate_emoticons=translate_emoticons,
-            )
+            ).rendered_content
 
             message["rendered_content"] = rendered_content
             message["rendered_content_version"] = markdown_version
@@ -864,7 +865,7 @@ def import_uploads(
 #
 # Because the Python object => JSON conversion process is not fully
 # faithful, we have to use a set of fixers (e.g. on DateTime objects
-# and Foreign Keys) to do the import correctly.
+# and foreign keys) to do the import correctly.
 def do_import_realm(import_dir: Path, subdomain: str, processes: int = 1) -> Realm:
     logging.info("Importing realm dump %s", import_dir)
     if not os.path.exists(import_dir):
@@ -920,8 +921,6 @@ def do_import_realm(import_dir: Path, subdomain: str, processes: int = 1) -> Rea
     re_map_foreign_keys(data, "zerver_stream", "realm", related_table="realm")
     # Handle rendering of stream descriptions for import from non-Zulip
     for stream in data["zerver_stream"]:
-        if "rendered_description" in stream:
-            continue
         stream["rendered_description"] = render_stream_description(stream["description"])
     bulk_import_model(data, Stream)
 
@@ -1056,7 +1055,7 @@ def do_import_realm(import_dir: Path, subdomain: str, processes: int = 1) -> Rea
             event_type=RealmAuditLog.REALM_CREATED,
             event_time=realm.date_created,
             # Mark these as backfilled, since they weren't created
-            # when the realm was actaully created, and thus do not
+            # when the realm was actually created, and thus do not
             # have the creating user associated with them.
             backfilled=True,
         )

@@ -5,10 +5,23 @@ import {$t} from "./i18n";
 import * as people from "./people";
 import * as user_status from "./user_status";
 
+let full_size_status = false; // true or false
+
+// Some functions to handle the full size status explicitly
+export function set_full_size(is_full) {
+    full_size_status = is_full;
+}
+
+export function is_full_size() {
+    return full_size_status;
+}
+
 export function autosize_textarea(textarea) {
     // Since this supports both compose and file upload, one must pass
     // in the text area to autosize.
-    autosize.update(textarea);
+    if (!is_full_size()) {
+        autosize.update(textarea);
+    }
 }
 
 export function smart_insert(textarea, syntax) {
@@ -121,4 +134,40 @@ export function compute_placeholder_text(opts) {
         return $t({defaultMessage: "Message {recipient_names}"}, {recipient_names});
     }
     return $t({defaultMessage: "Compose your message here"});
+}
+
+export function wrap_text_with_markdown(textarea, prefix, suffix) {
+    const range = textarea.range();
+
+    if (!document.execCommand("insertText", false, prefix + range.text + suffix)) {
+        textarea.range(range.start, range.end).range(prefix + range.text + suffix);
+    }
+}
+
+export function make_compose_box_full_size() {
+    set_full_size(true);
+
+    // The autosize should be destroyed for the full size compose
+    // box else it will interfare and shrink its size accordingly.
+    autosize.destroy($("#compose-textarea"));
+
+    $("#compose").addClass("compose-fullscreen");
+
+    $(".collapse_composebox_button").show();
+    $(".expand_composebox_button").hide();
+    $("#compose-textarea").trigger("focus");
+}
+
+export function make_compose_box_original_size() {
+    set_full_size(false);
+
+    $("#compose").removeClass("compose-fullscreen");
+
+    // Again initialise the compose textarea as it was destroyed
+    // when compose box was made full screen
+    autosize($("#compose-textarea"));
+
+    $(".collapse_composebox_button").hide();
+    $(".expand_composebox_button").show();
+    $("#compose-textarea").trigger("focus");
 }

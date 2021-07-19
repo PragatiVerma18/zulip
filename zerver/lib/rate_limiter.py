@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple, Type
+from typing import Dict, List, Optional, Tuple, Type, cast
 
 import redis
 from django.conf import settings
@@ -129,6 +129,24 @@ class RateLimitedUser(RateLimitedObject):
                 (seconds, requests) = limit.split(":", 2)
                 result.append((int(seconds), int(requests)))
             return result
+        return rules[self.domain]
+
+
+class RateLimitedIPAddr(RateLimitedObject):
+    def __init__(self, ip_addr: str, domain: str = "api_by_ip") -> None:
+        self.ip_addr = ip_addr
+        self.domain = domain
+        if settings.RUNNING_INSIDE_TORNADO and domain in settings.RATE_LIMITING_DOMAINS_FOR_TORNADO:
+            backend: Optional[Type[RateLimiterBackend]] = TornadoInMemoryRateLimiterBackend
+        else:
+            backend = None
+        super().__init__(backend=backend)
+
+    def key(self) -> str:
+        # The angle brackets are important since IPv6 addresses contain :.
+        return f"{type(self).__name__}:<{self.ip_addr}>:{self.domain}"
+
+    def rules(self) -> List[Tuple[int, int]]:
         return rules[self.domain]
 
 
@@ -427,7 +445,9 @@ class RedisRateLimiterBackend(RateLimiterBackend):
                     pipe.watch(list_key)
 
                     # Get the last elem that we'll trim (so we can remove it from our sorted set)
-                    last_val = pipe.lindex(list_key, max_api_calls - 1)
+                    last_val = cast(  # mypy doesn’t know the pipe is in immediate mode
+                        Optional[bytes], pipe.lindex(list_key, max_api_calls - 1)
+                    )
 
                     # Restart buffered execution
                     pipe.multi()

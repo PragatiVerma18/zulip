@@ -25,6 +25,8 @@ FILES_WITH_LEGACY_SUBJECT = {
     "zerver/tests/test_new_users.py",
     "zerver/tests/test_email_mirror.py",
     "zerver/tests/test_email_notifications.py",
+    # This uses subject in authentication protocols sense:
+    "zerver/tests/test_auth_backends.py",
     # These are tied more to our API than our DB model.
     "zerver/openapi/python_examples.py",
     "zerver/tests/test_openapi.py",
@@ -56,6 +58,7 @@ shebang_rules: List["Rule"] = [
 trailing_whitespace_rule: "Rule" = {
     "pattern": r"\s+$",
     "strip": "\n",
+    "exclude": {"tools/ci/success-http-headers.template.txt"},
     "description": "Fix trailing whitespace",
 }
 whitespace_rules: List["Rule"] = [
@@ -68,10 +71,6 @@ whitespace_rules: List["Rule"] = [
     {
         "pattern": "\t",
         "strip": "\n",
-        "exclude": {
-            "tools/ci/success-http-headers.template.txt",
-            "tools/ci/success-http-headers.template.debian.txt",
-        },
         "description": "Fix tab-based whitespace",
     },
 ]
@@ -105,7 +104,7 @@ markdown_whitespace_rules: List["Rule"] = [
 
 
 js_rules = RuleList(
-    langs=["js"],
+    langs=["js", "ts"],
     rules=[
         {
             "pattern": "subject|SUBJECT",
@@ -130,8 +129,8 @@ js_rules = RuleList(
             "exclude": {
                 "static/js/portico",
                 "static/js/lightbox.js",
-                "static/js/ui_report.js",
-                "static/js/confirm_dialog.js",
+                "static/js/ui_report.ts",
+                "static/js/dialog_widget.js",
                 "frontend_tests/",
             },
             "description": "Setting HTML content with jQuery .html() can lead to XSS security bugs.  Consider .text() or using rendered_foo as a variable name if content comes from handlebars and thus is already sanitized.",
@@ -188,7 +187,7 @@ js_rules = RuleList(
             "description": "Use channel module for AJAX calls",
             "exclude": {
                 # Internal modules can do direct network calls
-                "static/js/blueslip.js",
+                "static/js/blueslip.ts",
                 "static/js/channel.js",
                 # External modules that don't include channel.js
                 "static/js/stats/",
@@ -200,15 +199,19 @@ js_rules = RuleList(
         },
         {
             "pattern": "style ?=",
+            "exclude_pattern": r"(const |\S)style ?=",
             "description": "Avoid using the `style=` attribute; we prefer styling in CSS files",
             "exclude": {
                 "frontend_tests/node_tests/copy_and_paste.js",
-                "frontend_tests/node_tests/upload.js",
-                "static/js/upload.js",
-                "static/js/stream_color.js",
             },
-            "good_lines": ["#my-style {color: blue;}"],
+            "good_lines": ["#my-style {color: blue;}", "const style =", 'some_style = "test"'],
             "bad_lines": ['<p style="color: blue;">Foo</p>', 'style = "color: blue;"'],
+        },
+        {
+            "pattern": r"assert\(",
+            "description": "Use 'assert.ok' instead of 'assert'. We avoid the use of 'assert' as it can easily be confused with 'assert.equal'.",
+            "good_lines": ["assert.ok(...)"],
+            "bad_lines": ["assert(...)"],
         },
         *whitespace_rules,
     ],
@@ -268,6 +271,22 @@ python_rules = RuleList(
             "bad_lines": ["assertEquals(1, 2)"],
         },
         {
+            "pattern": "assertEqual[(]len[(][^ ]*[)],",
+            "description": "Use the assert_length helper instead of assertEqual(len(..), ..).",
+            "good_lines": ["assert_length(data, 2)"],
+            "bad_lines": ["assertEqual(len(data), 2)"],
+        },
+        {
+            "pattern": "assertTrue[(]len[(][^ ]*[)]",
+            "description": "Use assert_length or assertGreater helper instead of assertTrue(len(..) ..).",
+            "good_lines": ["assert_length(data, 2)", "assertGreater(len(data), 2)"],
+            "bad_lines": [
+                "assertTrue(len(data) == 2)",
+                "assertTrue(len(data) >= 2)",
+                "assertTrue(len(data) > 2)",
+            ],
+        },
+        {
             "pattern": r"#\s*type:\s*ignore(?!\[[^][]+\] +# +\S)",
             "exclude": {"tools/tests", "zerver/lib/test_runner.py", "zerver/tests"},
             "description": '"type: ignore" should always end with "# type: ignore[code] # explanation for why"',
@@ -308,18 +327,6 @@ python_rules = RuleList(
             "description": "Use json_success() to return nothing",
             "good_lines": ["return json_success()"],
             "bad_lines": ["return json_success({})"],
-        },
-        {
-            "pattern": r"\Wjson_error\(_\(?\w+\)",
-            "exclude": {"zerver/tests", "zerver/views/development/"},
-            "description": "Argument to json_error should be a literal string enclosed by _()",
-            "good_lines": ['return json_error(_("string"))'],
-            "bad_lines": ["return json_error(_variable)", "return json_error(_(variable))"],
-        },
-        {
-            "pattern": r"""\Wjson_error\(['"].+[),]$""",
-            "exclude": {"zerver/tests"},
-            "description": "Argument to json_error should a literal string enclosed by _()",
         },
         # To avoid JsonableError(_variable) and JsonableError(_(variable))
         {
@@ -533,7 +540,7 @@ html_rules: List["Rule"] = [
     *prose_style_rules,
     {
         "pattern": "subject|SUBJECT",
-        "exclude": {"templates/zerver/email.html"},
+        "exclude": {"templates/zerver/email.html", "zerver/tests/fixtures/email"},
         "exclude_pattern": "email subject",
         "description": "avoid subject in templates",
         "good_lines": ["topic_name"],
@@ -623,9 +630,12 @@ html_rules: List["Rule"] = [
     {
         "pattern": r"""\Walt=["'][^{"']""",
         "description": "alt argument should be enclosed by _() or it should be an empty string.",
-        "exclude": {
-            "static/templates/settings/display_settings.hbs",
-            "templates/zerver/app/keyboard_shortcuts.html",
+        "exclude_line": {
+            (
+                # Emoji should not be tagged for translation.
+                "static/templates/keyboard_shortcuts.hbs",
+                '<img alt=":thumbs_up:"',
+            ),
         },
         "good_lines": ['<img src="{{source_url}}" alt="{{ _(name) }}" />', '<img alg="" />'],
         "bad_lines": ['<img alt="Foo Image" />'],
@@ -674,8 +684,6 @@ html_rules: List["Rule"] = [
             # Social backend logos are dynamically loaded
             "templates/zerver/accounts_home.html",
             "templates/zerver/login.html",
-            # Probably just needs to be changed to display: none so the exclude works
-            "templates/zerver/app/navbar.html",
             # Needs the width cleaned up; display: none is fine
             "static/templates/settings/account_settings.hbs",
             # background image property is dynamically generated
@@ -684,14 +692,13 @@ html_rules: List["Rule"] = [
             # Inline styling for an svg; could be moved to CSS files?
             "templates/zerver/landing_nav.html",
             "templates/zerver/billing_nav.html",
-            "templates/zerver/app/home.html",
             "templates/zerver/features.html",
             "templates/zerver/portico-header.html",
             "templates/corporate/billing.html",
             "templates/corporate/upgrade.html",
             # Miscellaneous violations to be cleaned up
             "static/templates/user_info_popover_title.hbs",
-            "static/templates/subscription_invites_warning_modal.hbs",
+            "static/templates/confirm_dialog/confirm_subscription_invites_warning.hbs",
             "templates/zerver/reset_confirm.html",
             "templates/zerver/config_error.html",
             "templates/zerver/dev_env_email_access_details.html",
@@ -744,6 +751,10 @@ handlebars_rules = RuleList(
         {
             "pattern": '{{t "[^"]+ " }}',
             "description": "Translatable strings should not have trailing spaces.",
+        },
+        {
+            "pattern": r'"{{t "',
+            "description": "Invalid quoting for HTML element with translated string.",
         },
     ],
 )
@@ -831,6 +842,12 @@ markdown_rules = RuleList(
                 "docs/overview/readme.md",
                 "docs/README.md",
                 "docs/subsystems/email.md",
+            },
+            "exclude_line": {
+                (
+                    "docs/overview/changelog.md",
+                    "[latest-changelog]: https://zulip.readthedocs.io/en/latest/overview/changelog.html",
+                ),
             },
             "include_only": {"docs/"},
             "description": "Use relative links (../foo/bar.html) to other documents in docs/",

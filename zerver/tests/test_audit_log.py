@@ -9,7 +9,7 @@ from analytics.models import StreamCount
 from zerver.lib.actions import (
     bulk_add_subscriptions,
     bulk_remove_subscriptions,
-    do_activate_user,
+    do_activate_mirror_dummy_user,
     do_change_avatar_fields,
     do_change_bot_owner,
     do_change_default_all_public_streams,
@@ -41,6 +41,7 @@ from zerver.lib.streams import create_stream_if_needed
 from zerver.lib.test_classes import ZulipTestCase
 from zerver.models import (
     Message,
+    Realm,
     RealmAuditLog,
     Recipient,
     Subscription,
@@ -69,10 +70,10 @@ class TestRealmAuditLog(ZulipTestCase):
         now = timezone_now()
         user = do_create_user("email", "password", realm, "full_name", acting_user=None)
         do_deactivate_user(user, acting_user=user)
-        do_activate_user(user, acting_user=user)
+        do_activate_mirror_dummy_user(user, acting_user=user)
         do_deactivate_user(user, acting_user=user)
         do_reactivate_user(user, acting_user=user)
-        self.assertEqual(RealmAuditLog.objects.filter(event_time__gte=now).count(), 5)
+        self.assertEqual(RealmAuditLog.objects.filter(event_time__gte=now).count(), 6)
         event_types = list(
             RealmAuditLog.objects.filter(
                 realm=realm,
@@ -328,7 +329,7 @@ class TestRealmAuditLog(ZulipTestCase):
             realm,
             "test",
             invite_only=False,
-            stream_description="Test Description",
+            stream_description="Test description",
             acting_user=user,
         )[0]
         self.assertEqual(
@@ -374,6 +375,7 @@ class TestRealmAuditLog(ZulipTestCase):
             "Dev": True,
             "SAML": True,
             "GitLab": False,
+            "OpenID Connect": False,
         }
 
         do_set_realm_authentication_methods(realm, auth_method_dict, acting_user=user)
@@ -411,13 +413,13 @@ class TestRealmAuditLog(ZulipTestCase):
                 RealmAuditLog.NEW_VALUE: 1000,
             },
             {
-                "property": "allow_community_topic_editing",
-                RealmAuditLog.OLD_VALUE: True,
-                RealmAuditLog.NEW_VALUE: False,
+                "property": "edit_topic_policy",
+                RealmAuditLog.OLD_VALUE: Realm.POLICY_EVERYONE,
+                RealmAuditLog.NEW_VALUE: Realm.POLICY_ADMINS_ONLY,
             },
         ]
 
-        do_set_realm_message_editing(realm, True, 1000, False, acting_user=user)
+        do_set_realm_message_editing(realm, True, 1000, Realm.POLICY_ADMINS_ONLY, acting_user=user)
         realm_audit_logs = RealmAuditLog.objects.filter(
             realm=realm,
             event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
@@ -493,7 +495,7 @@ class TestRealmAuditLog(ZulipTestCase):
             acting_user=user,
             event_time__gte=test_start,
         )
-        self.assertEqual(len(audit_entries), 1)
+        self.assert_length(audit_entries, 1)
         self.assertEqual(icon_source, realm.icon_source)
         self.assertEqual(
             audit_entries.first().extra_data, "{'icon_source': 'G', 'icon_version': 2}"

@@ -15,7 +15,6 @@ from typing import (
     Iterable,
     Iterator,
     List,
-    Mapping,
     Optional,
     Tuple,
     TypeVar,
@@ -30,8 +29,10 @@ import ldap
 import orjson
 from boto3.resources.base import ServiceResource
 from django.conf import settings
+from django.contrib.auth.models import AnonymousUser
 from django.db.migrations.state import StateApps
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
+from django.http.request import QueryDict
 from django.test import override_settings
 from django.urls import URLResolver
 from moto import mock_s3
@@ -43,6 +44,7 @@ from zerver.lib.avatar import avatar_url
 from zerver.lib.cache import get_cache_backend
 from zerver.lib.db import Params, ParamsT, Query, TimeTrackingCursor
 from zerver.lib.integrations import WEBHOOK_INTEGRATIONS
+from zerver.lib.request import ZulipRequestNotes, request_notes_map
 from zerver.lib.upload import LocalUploadBackend, S3UploadBackend
 from zerver.models import (
     Client,
@@ -55,9 +57,9 @@ from zerver.models import (
     get_realm,
     get_stream,
 )
-from zerver.tornado import django_api as django_tornado_api
 from zerver.tornado.handlers import AsyncDjangoHandler, allocate_handler_id
 from zerver.worker import queue_processors
+from zilencer.models import RemoteZulipServer
 from zproject.backends import ExternalAuthDataDict, ExternalAuthResult
 
 if TYPE_CHECKING:
@@ -92,43 +94,6 @@ def stub_event_queue_user_events(
 def simulated_queue_client(client: Callable[[], object]) -> Iterator[None]:
     with mock.patch.object(queue_processors, "SimpleQueueClient", client):
         yield
-
-
-@contextmanager
-def tornado_redirected_to_list(lst: List[Mapping[str, Any]]) -> Iterator[None]:
-    real_event_queue_process_notification = django_tornado_api.process_notification
-    django_tornado_api.process_notification = lambda notice: lst.append(notice)
-    # process_notification takes a single parameter called 'notice'.
-    # lst.append takes a single argument called 'object'.
-    # Some code might call process_notification using keyword arguments,
-    # so mypy doesn't allow assigning lst.append to process_notification
-    # So explicitly change parameter name to 'notice' to work around this problem
-    yield
-    django_tornado_api.process_notification = real_event_queue_process_notification
-
-
-class EventInfo:
-    def populate(self, call_args_list: List[Any]) -> None:
-        args = call_args_list[0][0]
-        self.realm_id = args[0]
-        self.payload = args[1]
-        self.user_ids = args[2]
-
-
-@contextmanager
-def capture_event(event_info: EventInfo) -> Iterator[None]:
-    # Use this for simple endpoints that throw a single event
-    # in zerver.lib.actions.
-    with mock.patch("zerver.lib.actions.send_event") as m:
-        yield
-
-    if len(m.call_args_list) == 0:
-        raise AssertionError("No event was sent inside actions.py")
-
-    if len(m.call_args_list) > 1:
-        raise AssertionError("Too many events sent by action")
-
-    event_info.populate(m.call_args_list)
 
 
 @contextmanager
@@ -319,62 +284,60 @@ class DummyHandler(AsyncDjangoHandler):
         allocate_handler_id(self)
 
 
-class HostRequestMock:
+class HostRequestMock(HttpRequest):
     """A mock request object where get_host() works.  Useful for testing
     routes that use Zulip's subdomains feature"""
 
     def __init__(
         self,
         post_data: Dict[str, Any] = {},
-        user_profile: Optional[UserProfile] = None,
+        user_profile: Optional[Union[UserProfile, AnonymousUser, RemoteZulipServer]] = None,
         host: str = settings.EXTERNAL_HOST,
         client_name: Optional[str] = None,
+        meta_data: Optional[Dict[str, Any]] = None,
+        tornado_handler: Optional[AsyncDjangoHandler] = DummyHandler(),
     ) -> None:
         self.host = host
-        self.GET: Dict[str, Any] = {}
+        self.GET = QueryDict(mutable=True)
         self.method = ""
-        if client_name is not None:
-            self.client = get_client(client_name)
 
         # Convert any integer parameters passed into strings, even
         # though of course the HTTP API would do so.  Ideally, we'd
         # get rid of this abstraction entirely and just use the HTTP
         # API directly, but while it exists, we need this code
-        self.POST: Dict[str, Any] = {}
+        self.POST = QueryDict(mutable=True)
         for key in post_data:
             self.POST[key] = str(post_data[key])
             self.method = "POST"
 
         self._tornado_handler = DummyHandler()
         self._log_data: Dict[str, Any] = {}
-        self.META = {"PATH_INFO": "test"}
+        if meta_data is None:
+            self.META = {"PATH_INFO": "test"}
+        else:
+            self.META = meta_data
         self.path = ""
         self.user = user_profile
-        self.body = ""
+        self._body = b""
         self.content_type = ""
-        self.client_name = ""
+
+        request_notes_map[self] = ZulipRequestNotes(
+            client_name="",
+            log_data={},
+            tornado_handler=tornado_handler,
+            client=get_client(client_name) if client_name is not None else None,
+        )
+
+    @property
+    def body(self) -> bytes:
+        return super().body
+
+    @body.setter
+    def body(self, val: bytes) -> None:
+        self._body = val
 
     def get_host(self) -> str:
         return self.host
-
-
-class MockPythonResponse:
-    def __init__(
-        self, text: str, status_code: int, headers: Optional[Dict[str, str]] = None
-    ) -> None:
-        self.content = text.encode()
-        self.text = text
-        self.status_code = status_code
-        if headers is None:
-            headers = {"content-type": "text/html"}
-        self.headers = headers
-
-    @property
-    def ok(self) -> bool:
-        return self.status_code == 200
-
-    def iter_content(self, n: int) -> Generator[str, Any, None]:
-        yield self.text[:n]
 
 
 INSTRUMENTING = os.environ.get("TEST_INSTRUMENT_URL_COVERAGE", "") == "TRUE"
@@ -501,12 +464,16 @@ def write_instrumentation_reports(full_suite: bool, include_webhooks: bool) -> N
             "confirmation_key/",
             "node-coverage/(?P<path>.+)",
             "docs/(?P<path>.+)",
+            "help/change-the-topic-of-a-message",
             "help/configure-missed-message-emails",
+            "help/community-topic-edits",
             "help/delete-a-stream",
+            "for/working-groups-and-communities/",
             "api/delete-stream",
             "casper/(?P<path>.+)",
             "static/(?P<path>.+)",
             "flush_caches",
+            "external_content/(?P<digest>[^/]+)/(?P<received_url>[^/]+)",
             *(webhook.url for webhook in WEBHOOK_INTEGRATIONS if not include_webhooks),
         }
 
